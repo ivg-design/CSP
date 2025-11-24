@@ -28,6 +28,8 @@ import json
 import argparse
 import collections
 import re
+import websocket
+import urllib.parse
 
 # Configuration
 GATEWAY_URL = "http://localhost:8765"
@@ -160,6 +162,12 @@ class CSPSidecar:
         self.last_flush_time = time.time()
         self.paused = False
         self.pending_msgs = []
+        # WebSocket connection management
+        self.ws = None
+        self.ws_connected = False
+        self.ws_reconnect_attempts = 0
+        self.max_reconnect_attempts = 5
+        self.reconnect_delay = 1  # Start with 1 second
         # Agent-specific flow tuning
         lower_name = self.agent_name.lower()
         if 'claude' in lower_name:
@@ -413,10 +421,104 @@ class CSPSidecar:
             self.last_flush_time = time.time()
 
     def gateway_listener(self):
-        """Poll gateway for messages to inject"""
+        """WebSocket subscription with HTTP polling fallback"""
         while not self.should_exit:
+            # Try WebSocket first, fall back to HTTP polling
+            if self.try_websocket_connection():
+                self.websocket_listen()
+            else:
+                self.http_polling_fallback()
+
+        print("Gateway listener thread exiting", file=sys.stderr)
+
+    def try_websocket_connection(self):
+        """Attempt to establish WebSocket connection"""
+        if self.ws_connected or not self.agent_id:
+            return self.ws_connected
+
+        try:
+            # Convert HTTP URL to WebSocket URL
+            ws_url = self.gateway_url.replace('http://', 'ws://').replace('https://', 'wss://')
+            ws_url = f"{ws_url}/ws"
+
+            # Add authentication via query parameter
+            if self.auth_token:
+                parsed = urllib.parse.urlparse(ws_url)
+                query = urllib.parse.parse_qs(parsed.query)
+                query['token'] = [self.auth_token]
+                new_query = urllib.parse.urlencode(query, doseq=True)
+                ws_url = urllib.parse.urlunparse(parsed._replace(query=new_query))
+
+            # Create WebSocket connection
+            self.ws = websocket.WebSocketApp(
+                ws_url,
+                on_open=self.on_ws_open,
+                on_message=self.on_ws_message,
+                on_error=self.on_ws_error,
+                on_close=self.on_ws_close
+            )
+
+            print(f"[CSP] Attempting WebSocket connection to {ws_url}", file=sys.stderr)
+            return True
+
+        except Exception as e:
+            print(f"[CSP] WebSocket connection failed: {e}", file=sys.stderr)
+            return False
+
+    def websocket_listen(self):
+        """Run WebSocket event loop"""
+        try:
+            self.ws.run_forever()
+        except Exception as e:
+            print(f"[CSP] WebSocket error: {e}", file=sys.stderr)
+            self.ws_connected = False
+
+    def on_ws_open(self, ws):
+        """WebSocket connection opened"""
+        self.ws_connected = True
+        self.ws_reconnect_attempts = 0
+        self.reconnect_delay = 1
+        print(f"[CSP] WebSocket connected for agent {self.agent_id}", file=sys.stderr)
+
+    def on_ws_message(self, ws, message):
+        """Handle incoming WebSocket message"""
+        try:
+            msg_data = json.loads(message)
+
+            # Filter messages for this agent
+            to = msg_data.get('to', '')
+            if to == self.agent_id or to == 'broadcast':
+                if not self.should_exit:
+                    self.inject_message(msg_data)
+
+        except json.JSONDecodeError as e:
+            print(f"[CSP] Invalid WebSocket message: {e}", file=sys.stderr)
+        except Exception as e:
+            print(f"[CSP] WebSocket message handling error: {e}", file=sys.stderr)
+
+    def on_ws_error(self, ws, error):
+        """WebSocket error handler"""
+        print(f"[CSP] WebSocket error: {error}", file=sys.stderr)
+        self.ws_connected = False
+
+    def on_ws_close(self, ws, close_status_code, close_msg):
+        """WebSocket connection closed"""
+        self.ws_connected = False
+        if not self.should_exit:
+            print(f"[CSP] WebSocket disconnected (code: {close_status_code}), will retry", file=sys.stderr)
+            # Implement exponential backoff capped at 10s
+            if self.ws_reconnect_attempts < self.max_reconnect_attempts:
+                self.ws_reconnect_attempts += 1
+                self.reconnect_delay = min(self.reconnect_delay * 2, 10)  # Max 10 seconds
+                time.sleep(self.reconnect_delay)
+
+    def http_polling_fallback(self):
+        """Fallback to HTTP polling when WebSocket is unavailable"""
+        print(f"[CSP] Using HTTP polling fallback for agent {self.agent_id}", file=sys.stderr)
+
+        while not self.should_exit and not self.ws_connected:
             try:
-                if self.agent_id and not self.should_exit:
+                if self.agent_id:
                     headers = {}
                     if self.auth_token:
                         headers["X-Auth-Token"] = self.auth_token
@@ -429,19 +531,24 @@ class CSPSidecar:
                     if resp.status_code == 200:
                         messages = resp.json()
                         for msg in messages:
-                            if not self.should_exit:  # Check again before injecting
+                            if not self.should_exit:
                                 self.inject_message(msg)
-                    elif resp.status_code not in [404, 401]:  # Ignore expected auth/not-found errors
+                    elif resp.status_code not in [404, 401]:
                         print(f"Gateway inbox poll failed: {resp.status_code}", file=sys.stderr)
+
                 time.sleep(POLL_INTERVAL)
+
+                # Periodically retry WebSocket connection
+                if self.ws_reconnect_attempts < self.max_reconnect_attempts:
+                    time.sleep(5)  # Try WebSocket again every 5 seconds
+                    break  # Exit fallback to retry WebSocket
+
             except requests.exceptions.RequestException as e:
                 print(f"Gateway polling error: {e}", file=sys.stderr)
                 time.sleep(1)
             except Exception as e:
-                print(f"Unexpected error in gateway_listener: {e}", file=sys.stderr)
+                print(f"Unexpected error in http_polling_fallback: {e}", file=sys.stderr)
                 time.sleep(1)
-
-        print("Gateway listener thread exiting", file=sys.stderr)
 
     def inject_message(self, msg_obj):
         """Inject a message into the Agent's stdin as if the user typed it"""

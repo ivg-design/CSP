@@ -1,80 +1,52 @@
-# CSP (CLI Sidecar Protocol) - Multi-Agent CLI Orchestration
+# CSP: CLI Sidecar Protocol
 
-## Project Structure
+**Turn any CLI tool into a collaborative Multi-Agent Group Chat participant.**
 
-```
-csp/
-├── README.md                    # This file
-├── src/                         # Current/Active Code
-│   └── csp_sidecar.py          # Main CSP sidecar implementation
-├── docs/                        # Documentation
-│   ├── current/                 # Current documentation
-│   │   └── LLMGroupChat.md     # Main architecture & implementation guide
-│   ├── architecture/            # Architecture documentation
-│   │   ├── CSP_ARCH_V2.md      # CSP v2 architecture specification
-│   │   └── CSP_REVIEW.md       # Architectural review & analysis
-│   ├── analysis/                # Analysis & comparison documents
-│   │   ├── CSP_FIXES.md        # Implementation fixes & improvements
-│   │   ├── CSP_vs_A2A.md       # CSP vs A2A comparison
-│   │   └── A2A_vs_CSP.md       # Alternative comparison perspective
-│   └── planning/                # Planning & design documents
-│       ├── MULTI_AGENT_SYSTEM_GUIDE.md  # System design guide
-│       └── agent_task_split.md  # Task distribution planning
-└── .archive/                    # Deprecated/Historical files
-    ├── multi_agent_*.sh        # Old terminal implementations
-    ├── message_broker.py       # Previous messaging system
-    ├── *_agent.sh              # Legacy agent scripts
-    ├── *_manual.sh             # Manual implementations
-    └── agent_*.py              # Old agent clients
-```
+## 🌟 Overview
 
-## Quick Start
+CSP allows you to run native CLI agents (Claude, Gemini, Codex, plain Bash) in a **tmux** session where they can:
+1.  **Talk to each other** (Agent-to-Agent collaboration).
+2.  **Talk to you** (via Real-Time Push Chat).
+3.  **Retain full native fidelity** (Spinners, Colors, Interactive Prompts work perfectly).
 
-### Main Implementation
-- **`src/csp_sidecar.py`** - Production-ready CSP sidecar with intelligent flow control
-- **`docs/current/LLMGroupChat.md`** - Complete architecture, setup, and usage guide
+## 🚀 Quick Start
 
-### Key Features
-- **Real-time multi-agent collaboration** while preserving native CLI experience
-- **Intelligent message injection** with flow control to prevent command interruption
-- **Production-grade PTY proxy** with ANSI cleaning and adaptive streaming
-- **Pause/resume controls** for safe task management
-- **Agent-specific tuning** optimized for Claude, Codex, and Gemini
-
-### Usage
 ```bash
-# Start CSP sidecar for an agent
-python3 src/csp_sidecar.py --name="Claude" --gateway-url="http://localhost:8765" --auth-token="your-token" --cmd claude --dangerously-skip-permissions
+# 1. Clone & Install
+git clone https://github.com/your-repo/csp.git
+cd csp
+npm install
+
+# 2. Launch the Orchestrator
+# Generates CSP_AUTH_TOKEN and starts Gateway + tmux
+./bin/start-llm-groupchat.sh
 ```
 
-## Documentation Organization
+## ⚡ Key Features (v2)
 
-### Current Documentation
-Latest architecture and implementation details.
+### 📡 Real-Time Push Architecture
+*   **WebSockets / SSE**: Gateway pushes messages instantly to all agents.
+*   **Auto-Reconnect**: Clients handle network blips with exponential backoff.
+*   **HTTP Fallback**: Robust polling ensures delivery even if WS fails.
 
-### Architecture
-Core system design, specifications, and architectural reviews.
+### 🛡️ Smart Flow Control
+*   **Busy Detection**: Prevents injecting text while an agent is running a command (e.g., compilation).
+*   **Ghost Logs**: Visual indicator `[CSP queued 3 msgs]` shows you when messages are buffered.
+*   **Urgent Bypass**: Prefix `!` (e.g., `!stop`) to interrupt a busy agent.
+*   **Manual Control**: `/pause` and `/resume` commands.
 
-### Analysis
-Implementation analysis, fixes, and comparison studies.
+### 🔐 Secure & Simple
+*   **Auth**: Auto-generated `CSP_AUTH_TOKEN` secures the local mesh.
+*   **Env Config**: `CSP_GATEWAY_URL` automatically propagated to all panes.
 
-### Planning
-Design documents, system guides, and task planning materials.
+## 📚 Documentation
 
-### Archive
-Historical implementations and deprecated code preserved for reference.
+*   [**Architecture & Guide**](docs/current/LLMGroupChat.md): Full system design.
+*   [**Protocol Comparison**](docs/current/CSP_vs_A2A.md): CSP vs. A2A.
 
-## Development Status
+## 📂 Project Structure
 
-**Status: Production Ready**
-- CSP v2 architecture implemented
-- Intelligent flow control with adaptive streaming
-- Production-grade error handling and lifecycle management
-- Multi-agent coordination with pause/resume capabilities
-
-## Contributing
-
-This project represents a foundational infrastructure for multi-agent CLI orchestration. The current implementation in `src/` is production-ready and actively maintained.
-
----
-*Last updated: November 24, 2024*
+*   `bin/`: Launcher scripts (`start-llm-groupchat.sh`).
+*   `src/gateway/`: Node.js Message Broker (WS/HTTP).
+*   `src/human-interface/`: Human Chat CLI.
+*   `csp_sidecar.py`: Python PTY Proxy (Push Consumer).

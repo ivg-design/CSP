@@ -1,7 +1,7 @@
 # CSP Multi-Agent Implementation Plan (3 CLI Agents + Human, Real-Time Push)
 
 ## Goal
-Run human + three agents with real-time push (WS/SSE), adaptive streaming, and safe injection flow control across tmux panes, with clear task splits per agent.
+implement and build a 100% operational CSP system as per the design spec from  /docs/current/LLMGroupChat.md
 
 ## Deliverables
 - Gateway with WS/SSE push broadcast for all messages/chunks.
