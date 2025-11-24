@@ -27,6 +27,12 @@ trap cleanup EXIT
 
 echo -e "${BLUE}🚀 Initializing CSP Multi-Agent System...${NC}"
 
+# 0. Kill any existing processes
+echo -e "${YELLOW}🧹 Cleaning up any existing processes...${NC}"
+pkill -f "node.*csp_gateway" 2>/dev/null || true
+tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
+sleep 1
+
 # 1. Environment & Auth
 # CSP_AUTH_TOKEN is required for all clients (sidecars & human controller) to talk to the Gateway.
 # This ensures no unauthorized processes can inject messages into the agent swarm.
