@@ -73,3 +73,7 @@ temp/
 .env.production
 config/secrets.json
 auth_tokens.txt
+
+# GitHub templates and archived files (keep local only)
+.github/
+.archive/
