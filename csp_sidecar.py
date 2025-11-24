@@ -79,11 +79,11 @@ class FlowController:
         self.recent_buffer = b""
         # Regex prompt patterns
         self.prompt_patterns = [
-            re.compile(rb'.*[>$#]\s*$'),
-            re.compile(rb'.*\?\s*$'),
-            re.compile(rb'.*:\s*$'),
-            re.compile(rb'.*\[y/n\]\s*$'),
-            re.compile(rb'Press.*to continue.*$')
+            re.compile(r'.*[>$#]\s*$'),
+            re.compile(r'.*\?\s*$'),
+            re.compile(r'.*:\s*$'),
+            re.compile(r'.*\[y/n\]\s*$'),
+            re.compile(r'Press.*to continue.*$')
         ]
 
     def on_output(self, data: bytes):

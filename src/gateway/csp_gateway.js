@@ -1,12 +1,15 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
+const http = require('http');
+const WebSocket = require('ws');
 
 class CSPGateway {
   constructor(options = {}) {
     this.agents = new Map();
     this.chatHistory = [];
     this.messageIdCounter = 0;
+    this.wsConnections = new Set(); // Track WebSocket connections
 
     // Security configuration
     this.config = {
@@ -73,6 +76,9 @@ class CSPGateway {
     for (const [agentId, agent] of this.agents) {
       agent.messageQueue.push(message);
     }
+
+    // Broadcast via WebSocket
+    this.broadcastWebSocket(message);
   }
 
   // Message routing with validation
@@ -115,7 +121,28 @@ class CSPGateway {
       }
     }
 
+    // Broadcast via WebSocket to all connected clients
+    this.broadcastWebSocket(message);
+
     return message;
+  }
+
+  // WebSocket broadcasting
+  broadcastWebSocket(message) {
+    const messageData = JSON.stringify(message);
+    this.wsConnections.forEach(ws => {
+      if (ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(messageData);
+        } catch (error) {
+          console.error('[Gateway] WebSocket send error:', error);
+          this.wsConnections.delete(ws);
+        }
+      } else {
+        // Clean up closed connections
+        this.wsConnections.delete(ws);
+      }
+    });
   }
 
   // Cleanup inactive agents
@@ -227,9 +254,44 @@ class CSPGateway {
       this.cleanupInactiveAgents();
     }, 60 * 1000);
 
+    // Create HTTP server
+    const server = http.createServer(app);
+
+    // Setup WebSocket server
+    const wss = new WebSocket.Server({
+      server,
+      path: '/ws',
+      verifyClient: (info) => {
+        // Check authentication for WebSocket connections
+        const url = new URL(info.req.url, `http://${info.req.headers.host}`);
+        const token = info.req.headers['x-auth-token'] || url.searchParams.get('token');
+
+        // Allow if no token set in config (dev mode)
+        if (!this.config.authToken) return true;
+
+        return token === this.config.authToken;
+      }
+    });
+
+    wss.on('connection', (ws, req) => {
+      console.log('[Gateway] WebSocket client connected');
+      this.wsConnections.add(ws);
+
+      ws.on('close', () => {
+        console.log('[Gateway] WebSocket client disconnected');
+        this.wsConnections.delete(ws);
+      });
+
+      ws.on('error', (error) => {
+        console.error('[Gateway] WebSocket error:', error);
+        this.wsConnections.delete(ws);
+      });
+    });
+
     // Start server
-    const server = app.listen(this.config.port, this.config.host, () => {
-      console.log(`[CSP Gateway] Running on http://${this.config.host}:${this.config.port}`);
+    server.listen(this.config.port, this.config.host, () => {
+      console.log(`[CSP Gateway] HTTP server running on http://${this.config.host}:${this.config.port}`);
+      console.log(`[CSP Gateway] WebSocket server running on ws://${this.config.host}:${this.config.port}/ws`);
     });
 
     return server;

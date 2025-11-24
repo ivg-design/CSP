@@ -63,10 +63,13 @@ tmux send-keys -t "$SESSION_NAME:0" "export CSP_AUTH_TOKEN='$CSP_AUTH_TOKEN'" C-
 tmux send-keys -t "$SESSION_NAME:0" "export CSP_GATEWAY_URL='$CSP_GATEWAY_URL'" C-m
 tmux send-keys -t "$SESSION_NAME:0" "node src/human-interface/chat-controller.js" C-m
 
-# Split layout (1 Top, 3 Bottom)
-tmux split-window -v -p 75 -t "$SESSION_NAME:0"  # Split top/bottom
+# Split layout (1 Top, 3 Bottom) - more balanced
+tmux split-window -v -p 60 -t "$SESSION_NAME:0"  # Split top/bottom (40% top, 60% bottom)
+sleep 0.1
 tmux split-window -h -t "$SESSION_NAME:0.1"      # Split bottom into 2
+sleep 0.1
 tmux split-window -h -t "$SESSION_NAME:0.2"      # Split bottom right into 2 (Total 3 bottom)
+sleep 0.1
 
 # Pane 1 (Bottom Left): Agent Slot 1
 tmux send-keys -t "$SESSION_NAME:0.1" "export CSP_AUTH_TOKEN='$CSP_AUTH_TOKEN'" C-m
@@ -83,12 +86,23 @@ tmux send-keys -t "$SESSION_NAME:0.3" "export CSP_AUTH_TOKEN='$CSP_AUTH_TOKEN'" 
 tmux send-keys -t "$SESSION_NAME:0.3" "export CSP_GATEWAY_URL='$CSP_GATEWAY_URL'" C-m
 tmux send-keys -t "$SESSION_NAME:0.3" "$SCRIPT_DIR/csp-agent-launcher.sh 'Agent-3'" C-m
 
-# Styling
+# Styling and layout finalization
 tmux select-pane -t "$SESSION_NAME:0.0" -T "🎛️ Human Controller"
-tmux select-pane -t "$SESSION_NAME:0.1" -T "🤖 Slot 1"
-tmux select-pane -t "$SESSION_NAME:0.2" -T "🤖 Slot 2"
-tmux select-pane -t "$SESSION_NAME:0.3" -T "🤖 Slot 3"
+tmux select-pane -t "$SESSION_NAME:0.1" -T "🤖 Agent Slot 1"
+tmux select-pane -t "$SESSION_NAME:0.2" -T "🤖 Agent Slot 2"
+tmux select-pane -t "$SESSION_NAME:0.3" -T "🤖 Agent Slot 3"
 
-# Attach
-echo -e "${GREEN}✅ System Ready. Attaching to tmux...${NC}"
+# Ensure proper layout and make panes more accessible
+tmux select-layout -t "$SESSION_NAME" tiled 2>/dev/null || true
+tmux select-layout -t "$SESSION_NAME" main-horizontal 2>/dev/null || true
+tmux select-pane -t "$SESSION_NAME:0.0"  # Start with Human Controller selected
+
+# Final setup
+echo -e "${GREEN}✅ System Ready!"
+echo -e "${BLUE}📋 Layout: 1 human controller (top), 3 agent slots (bottom)${NC}"
+echo -e "${BLUE}🔧 Use Ctrl+B + arrow keys to navigate panes${NC}"
+echo -e "${BLUE}🔧 Use Ctrl+B + z to zoom current pane${NC}"
+echo "Attaching to tmux session..."
+sleep 1
+
 tmux attach -t "$SESSION_NAME"
