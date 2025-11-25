@@ -681,12 +681,15 @@ if __name__ == "__main__":
     parser.add_argument("--cmd", required=True, nargs=argparse.REMAINDER, help="Command to run")
     args = parser.parse_args()
 
-    if not args.cmd:
+    # Filter out '--' if present (argparse.REMAINDER doesn't handle it well)
+    cmd = [arg for arg in args.cmd if arg != '--']
+
+    if not cmd:
         print("Error: No command specified")
         sys.exit(1)
 
     sidecar = CSPSidecar(
-        args.cmd,
+        cmd,
         args.name,
         gateway_url=args.gateway_url,
         initial_prompt=args.initial_prompt,

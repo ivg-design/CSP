@@ -39,11 +39,12 @@ run_agent() {
     # Connects to Gateway using CSP_AUTH_TOKEN.
     # Enables WebSocket Push / HTTP Polling for real-time inbox.
     # Handles Flow Control (Busy/Idle) and Ghost Logging automatically.
+    # Note: --cmd must be LAST argument, $CMD is intentionally unquoted to allow word splitting
     python3 "$PROJECT_ROOT/csp_sidecar.py" \
         --name "$UNIQUE_NAME" \
         --gateway-url "$CSP_GATEWAY_URL" \
         --auth-token "$CSP_AUTH_TOKEN" \
-        --cmd -- $CMD
+        --cmd $CMD
         
     echo -e "\n${CYAN}Agent exited. Press Enter to return to menu...${NC}"
     read
