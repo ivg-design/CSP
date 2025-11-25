@@ -176,8 +176,10 @@ class CSPSidecar:
             self.flow = FlowController(min_silence=0.2, long_silence=2.0)
         else:
             self.flow = FlowController()
-        # Always share output to gateway (enables bidirectional communication)
-        self.share_enabled = True
+        # Disable output streaming by default - TUI apps like Claude Code
+        # produce too much screen refresh garbage that floods the chat.
+        # Communication is ONE-WAY: Human → Agents (message injection only)
+        self.share_enabled = False
         
     def register_agent(self):
         """Register this agent with the gateway"""
