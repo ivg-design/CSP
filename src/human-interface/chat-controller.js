@@ -80,6 +80,36 @@ class HumanChatController {
     }
   }
 
+  async queryHistory(options = {}) {
+    try {
+      const params = new URLSearchParams();
+      if (options.limit) params.append('limit', options.limit);
+      if (options.from) params.append('from', options.from);
+      if (options.to) params.append('to', options.to);
+      if (options.since) params.append('since', options.since);
+
+      const res = await this.client.get(`/history?${params}`);
+      const data = res.data;
+
+      console.log(`\n📜 Chat History (${data.count} messages):`);
+      console.log('─'.repeat(70));
+
+      data.messages.forEach(msg => {
+        const time = new Date(msg.timestamp).toLocaleTimeString();
+        const typeIcon = msg.type === 'system' ? '🔔' : '💬';
+        let line = `${typeIcon} [${time}] ${msg.from}`;
+        if (msg.to !== 'broadcast') line += ` → ${msg.to}`;
+        line += `: ${msg.content}`;
+        console.log(line);
+      });
+
+      console.log('─'.repeat(70));
+      console.log(`Total messages in history: ${data.total}\n`);
+    } catch (error) {
+      console.error('❌ Failed to query history:', error.message);
+    }
+  }
+
   startWebSocketListener() {
     // Try WebSocket first, fall back to HTTP polling
     if (this.tryWebSocketConnection()) {
@@ -240,25 +270,39 @@ async function main() {
 
         if (input === '/help') {
             console.log('\nCommands:');
-            console.log('  @agent message  - Send to specific agent (e.g., @claude hello)');
-            console.log('  @all message    - Broadcast to all agents');
-            console.log('  message         - Broadcast to all agents');
-            console.log('  /agents         - List connected agents');
-            console.log('  /help           - Show this help\n');
+            console.log('  @agent message      - Send to specific agent (e.g., @claude hello)');
+            console.log('  @all message        - Broadcast to all agents');
+            console.log('  message             - Broadcast to all agents');
+            console.log('  @query.log [limit]  - Show chat history (default: 50 messages)');
+            console.log('  /agents             - List connected agents');
+            console.log('  /help               - Show this help\n');
             rl.prompt();
             return;
         }
 
         if (input.startsWith('@')) {
-            // Direct message: @claude hello or @all hello
+            // Handle special commands and direct messages
             const spaceIndex = input.indexOf(' ');
-            if (spaceIndex === -1) {
-                console.log('Usage: @agent message');
+            const command = spaceIndex === -1 ? input.substring(1) : input.substring(1, spaceIndex);
+            const args = spaceIndex === -1 ? '' : input.substring(spaceIndex + 1);
+
+            // Check for @query.log
+            if (command === 'query.log') {
+                const limit = args ? parseInt(args) : 50;
+                await controller.queryHistory({ limit: Math.min(limit, 1000) });
                 rl.prompt();
                 return;
             }
-            const target = input.substring(1, spaceIndex).toLowerCase();
-            const msg = input.substring(spaceIndex + 1);
+
+            // Regular direct message: @claude hello or @all hello
+            if (spaceIndex === -1) {
+                console.log('Usage: @agent message or @query.log [limit]');
+                rl.prompt();
+                return;
+            }
+
+            const target = command.toLowerCase();
+            const msg = args;
 
             if (target === 'all') {
                 await controller.sendMessage(msg, 'broadcast');

@@ -30,6 +30,7 @@ import collections
 import re
 import websocket
 import urllib.parse
+from datetime import datetime
 
 # Configuration
 GATEWAY_URL = "http://localhost:8765"
@@ -37,6 +38,158 @@ POLL_INTERVAL = 0.1
 STREAM_FLUSH_INTERVAL = 0.2  # seconds
 STREAM_CHUNK_THRESHOLD = 512  # characters
 STREAM_MAX_BUFFER = 8192      # characters
+
+
+class AgentCommandProcessor:
+    """Intercepts and handles @-commands in agent output (Phase 2 feature)"""
+
+    def __init__(self, agent_id, gateway_url, auth_token):
+        self.agent_id = agent_id
+        self.gateway_url = gateway_url
+        self.auth_token = auth_token
+        # Command pattern: @command.subcommand args... or @agent_name message
+        self.command_patterns = [
+            re.compile(r'@query\.log(?:\s+(\d+))?(?:\s+from=([^\s]+))?(?:\s+to=([^\s]+))?'),  # @query.log [limit] [from=X] [to=Y]
+            re.compile(r'@send\.(\w+)\s+(.+)'),  # @send.agent_name message
+            re.compile(r'@all\s+(.+)'),  # @all message
+        ]
+
+    def detect_commands(self, text: str) -> list:
+        """Detect all @-commands in text. Returns list of (command_type, args)"""
+        commands = []
+        lines = text.split('\n')
+
+        for line in lines:
+            # Check for @query.log
+            match = self.command_patterns[0].search(line)
+            if match:
+                limit = int(match.group(1)) if match.group(1) else 50
+                from_agent = match.group(2)
+                to_agent = match.group(3)
+                commands.append(('query_log', {'limit': limit, 'from': from_agent, 'to': to_agent}))
+                continue
+
+            # Check for @send.agent_name
+            match = self.command_patterns[1].search(line)
+            if match:
+                target_agent = match.group(1)
+                message = match.group(2).strip()
+                commands.append(('send_agent', {'target': target_agent, 'message': message}))
+                continue
+
+            # Check for @all
+            match = self.command_patterns[2].search(line)
+            if match:
+                message = match.group(1).strip()
+                commands.append(('send_all', {'message': message}))
+                continue
+
+        return commands
+
+    def execute_command(self, command_type: str, args: dict) -> str:
+        """Execute a detected command and return formatted result"""
+        try:
+            if command_type == 'query_log':
+                return self._execute_query_log(args)
+            elif command_type == 'send_agent':
+                return self._execute_send_agent(args)
+            elif command_type == 'send_all':
+                return self._execute_send_all(args)
+        except Exception as e:
+            return f"[CSP Error: {str(e)}]"
+
+    def _execute_query_log(self, args: dict) -> str:
+        """Query chat history from gateway"""
+        try:
+            params = {'limit': args.get('limit', 50)}
+            if args.get('from'):
+                params['from'] = args['from']
+            if args.get('to'):
+                params['to'] = args['to']
+
+            headers = {'X-Auth-Token': self.auth_token} if self.auth_token else {}
+            response = requests.get(
+                f"{self.gateway_url}/history",
+                params=params,
+                headers=headers,
+                timeout=2
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                messages = data.get('messages', [])
+
+                if not messages:
+                    return "[CSP: No messages in history]"
+
+                result = "[CSP: Recent messages]\n"
+                for msg in messages:
+                    time_str = datetime.fromisoformat(msg['timestamp']).strftime('%H:%M:%S')
+                    sender = msg.get('from', 'unknown')
+                    recipient = msg.get('to', 'broadcast')
+                    content = msg.get('content', '')[:100]  # Truncate long messages
+                    result += f"[{time_str}] {sender}: {content}\n"
+
+                return result.rstrip()
+            else:
+                return f"[CSP: History query failed ({response.status_code})]"
+        except requests.exceptions.Timeout:
+            return "[CSP: History query timeout]"
+        except Exception as e:
+            return f"[CSP: History query error - {str(e)}]"
+
+    def _execute_send_agent(self, args: dict) -> str:
+        """Send message to specific agent"""
+        try:
+            target = args.get('target')
+            message = args.get('message', '')
+
+            headers = {'X-Auth-Token': self.auth_token} if self.auth_token else {}
+            payload = {
+                'from': self.agent_id,
+                'to': target,
+                'content': message
+            }
+
+            response = requests.post(
+                f"{self.gateway_url}/message",
+                json=payload,
+                headers=headers,
+                timeout=2
+            )
+
+            if response.status_code in [200, 201]:
+                return f"[CSP: Message sent to {target}]"
+            else:
+                return f"[CSP: Send failed ({response.status_code})]"
+        except Exception as e:
+            return f"[CSP: Send error - {str(e)}]"
+
+    def _execute_send_all(self, args: dict) -> str:
+        """Send message to all agents"""
+        try:
+            message = args.get('message', '')
+
+            headers = {'X-Auth-Token': self.auth_token} if self.auth_token else {}
+            payload = {
+                'from': self.agent_id,
+                'to': 'broadcast',
+                'content': message
+            }
+
+            response = requests.post(
+                f"{self.gateway_url}/message",
+                json=payload,
+                headers=headers,
+                timeout=2
+            )
+
+            if response.status_code in [200, 201]:
+                return "[CSP: Message broadcast to all agents]"
+            else:
+                return f"[CSP: Broadcast failed ({response.status_code})]"
+        except Exception as e:
+            return f"[CSP: Broadcast error - {str(e)}]"
 
 
 class StreamCleaner:
@@ -180,6 +333,8 @@ class CSPSidecar:
         # produce too much screen refresh garbage that floods the chat.
         # Communication is ONE-WAY: Human → Agents (message injection only)
         self.share_enabled = False
+        # Phase 2: Agent command processor (will be initialized after agent_id is set)
+        self.command_processor = None
         
     def register_agent(self):
         """Register this agent with the gateway"""
@@ -206,6 +361,12 @@ class CSPSidecar:
             if response.status_code in [200, 201]:
                 data = response.json()
                 print(f"Successfully registered as agent {self.agent_id}", file=sys.stderr)
+                # Initialize command processor now that we have agent_id
+                self.command_processor = AgentCommandProcessor(
+                    self.agent_id,
+                    self.gateway_url,
+                    self.auth_token
+                )
                 return True
             else:
                 print(f"Registration failed: {response.status_code} - {response.text}", file=sys.stderr)
@@ -347,9 +508,19 @@ class CSPSidecar:
                 # 1b. Update flow controller with fresh output
                 self.flow.on_output(data)
 
-                # 2. Adaptive chunking for Gateway
+                # 2. Adaptive chunking for Gateway + Phase 2: Command detection
                 clean_chunk = self.cleaner.process(data)
                 if clean_chunk:
+                    # Phase 2: Check for @-commands in agent output
+                    if self.command_processor:
+                        commands = self.command_processor.detect_commands(clean_chunk)
+                        for cmd_type, cmd_args in commands:
+                            # Execute the command
+                            result = self.command_processor.execute_command(cmd_type, cmd_args)
+                            # Inject result back to agent with slight delay to avoid buffer issues
+                            self.flow.enqueue('CSP', result, priority='normal')
+                            print(f"[CSP] Detected {cmd_type} command, enqueued response", file=sys.stderr)
+
                     self.stream_buffer += clean_chunk
                     boundary = ('\n' in clean_chunk) or ('. ' in clean_chunk)
                     self.maybe_flush_stream(boundary=boundary)

@@ -3,6 +3,8 @@ const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
 const http = require('http');
 const WebSocket = require('ws');
+const fs = require('fs');
+const path = require('path');
 
 class CSPGateway {
   constructor(options = {}) {
@@ -10,6 +12,10 @@ class CSPGateway {
     this.chatHistory = [];
     this.messageIdCounter = 0;
     this.wsConnections = new Set(); // Track WebSocket connections
+
+    // JSONL persistence configuration
+    this.historyFile = options.historyFile || path.join(process.cwd(), 'csp_history.jsonl');
+    this.initializeHistoryFile();
 
     // Security configuration
     this.config = {
@@ -22,6 +28,7 @@ class CSPGateway {
     };
 
     console.log(`[Gateway] Auth token: ${this.config.authToken}`);
+    console.log(`[Gateway] History file: ${this.historyFile}`);
   }
 
   generateToken() {
@@ -30,6 +37,31 @@ class CSPGateway {
 
   generateMessageId() {
     return `msg-${Date.now()}-${++this.messageIdCounter}`;
+  }
+
+  initializeHistoryFile() {
+    try {
+      // Create file if it doesn't exist (touches it)
+      if (!fs.existsSync(this.historyFile)) {
+        fs.writeFileSync(this.historyFile, '', 'utf8');
+        console.log(`[Gateway] Created history file: ${this.historyFile}`);
+      } else {
+        console.log(`[Gateway] Using existing history file: ${this.historyFile}`);
+      }
+    } catch (error) {
+      console.error(`[Gateway] Failed to initialize history file: ${error.message}`);
+      // Don't fail startup, just log warning
+    }
+  }
+
+  appendToHistory(message) {
+    try {
+      const jsonLine = JSON.stringify(message) + '\n';
+      fs.appendFileSync(this.historyFile, jsonLine, 'utf8');
+    } catch (error) {
+      console.error(`[Gateway] Failed to append to history: ${error.message}`);
+      // Don't fail message delivery if persistence fails
+    }
   }
 
   // Agent lifecycle management
@@ -71,6 +103,7 @@ class CSPGateway {
     };
 
     this.chatHistory.push(message);
+    this.appendToHistory(message); // Persist to JSONL
 
     // Deliver to all agents
     for (const [agentId, agent] of this.agents) {
@@ -99,8 +132,11 @@ class CSPGateway {
       type: targetAgent ? 'direct' : 'broadcast'
     };
 
-    // Store in history
+    // Store in history (in-memory)
     this.chatHistory.push(message);
+
+    // Persist to JSONL file
+    this.appendToHistory(message);
 
     // Update sender's last seen
     if (this.agents.has(fromAgent)) {
@@ -212,6 +248,24 @@ class CSPGateway {
       }
     });
 
+    // Phase 2: Agent-to-Agent messaging
+    app.post('/message', (req, res) => {
+      try {
+        const { from, to, content } = req.body;
+
+        if (!from || !content) {
+          return res.status(400).json({ error: 'Missing from or content' });
+        }
+
+        // Route the message (to can be agent_id or 'broadcast')
+        const message = this.routeMessage(from, content, to || 'broadcast');
+        res.json({ success: true, messageId: message.id });
+      } catch (error) {
+        console.error('[Gateway] Message routing error:', error);
+        res.status(400).json({ error: error.message });
+      }
+    });
+
     // Message retrieval (polling)
     app.get('/inbox/:agentId', (req, res) => {
       const agentId = req.params.agentId;
@@ -249,6 +303,42 @@ class CSPGateway {
             });
         }
         res.json(agentList);
+    });
+
+    // Query chat history with filtering
+    app.get('/history', (req, res) => {
+      try {
+        const limit = Math.min(parseInt(req.query.limit) || 100, 1000); // Max 1000
+        const from = req.query.from; // Filter by sender
+        const to = req.query.to;     // Filter by recipient
+        const since = req.query.since; // ISO timestamp
+
+        // Read from in-memory history (JSONL is backup)
+        let messages = this.chatHistory.slice();
+
+        // Apply filters
+        if (from) {
+          messages = messages.filter(m => m.from === from);
+        }
+        if (to) {
+          messages = messages.filter(m => m.to === to || to === 'broadcast');
+        }
+        if (since) {
+          messages = messages.filter(m => new Date(m.timestamp) > new Date(since));
+        }
+
+        // Return last 'limit' messages in chronological order
+        const result = messages.slice(-limit);
+
+        res.json({
+          count: result.length,
+          total: this.chatHistory.length,
+          messages: result
+        });
+      } catch (error) {
+        console.error('[Gateway] History query error:', error);
+        res.status(400).json({ error: error.message });
+      }
     });
 
     // Unregister
