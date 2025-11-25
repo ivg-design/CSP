@@ -43,7 +43,7 @@ run_agent() {
         --name "$UNIQUE_NAME" \
         --gateway-url "$CSP_GATEWAY_URL" \
         --auth-token "$CSP_AUTH_TOKEN" \
-        --cmd $CMD
+        --cmd -- $CMD
         
     echo -e "\n${CYAN}Agent exited. Press Enter to return to menu...${NC}"
     read

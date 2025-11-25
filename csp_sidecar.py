@@ -176,6 +176,8 @@ class CSPSidecar:
             self.flow = FlowController(min_silence=0.2, long_silence=2.0)
         else:
             self.flow = FlowController()
+        # Always share output to gateway (enables bidirectional communication)
+        self.share_enabled = True
         
     def register_agent(self):
         """Register this agent with the gateway"""
@@ -183,8 +185,8 @@ class CSPSidecar:
             print("Error: No auth token provided - gateway requires authentication", file=sys.stderr)
             return False
 
-        # Generate unique agent ID
-        self.agent_id = f"{self.agent_name.lower().replace(' ', '-')}-{int(time.time())}"
+        # Use clean agent ID (base name only, no timestamp for easier addressing)
+        self.agent_id = self.agent_name.lower().replace(' ', '-').split('-')[0]
 
         headers = {"X-Auth-Token": self.auth_token}
 
@@ -214,7 +216,7 @@ class CSPSidecar:
         # Save original tty settings
         try:
             old_tty = termios.tcgetattr(sys.stdin)
-        except:
+        except (termios.error, OSError):
             old_tty = None
 
         # Register with gateway first
@@ -277,8 +279,8 @@ class CSPSidecar:
                 if old_tty:
                     try:
                         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_tty)
-                    except:
-                        pass
+                    except (termios.error, OSError):
+                        pass  # TTY may already be gone
 
                 # Clean up agent registration
                 self.unregister_agent()
@@ -295,8 +297,8 @@ class CSPSidecar:
         try:
             rows, cols, x, y = struct.unpack('HHHH', fcntl.ioctl(sys.stdin, termios.TIOCGWINSZ, struct.pack('HHHH', 0, 0, 0, 0)))
             fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, x, y))
-        except:
-            pass
+        except (OSError, IOError):
+            pass  # Window size not available
 
     def setup_signal_handlers(self):
         signal.signal(signal.SIGWINCH, lambda s, f: self.set_winsize())
@@ -389,7 +391,26 @@ class CSPSidecar:
 
     def flush_stream(self):
         """Send buffered clean text to the gateway with auth."""
+        # Only share if explicitly enabled by an inbound message
+        if not self.share_enabled:
+            self.stream_buffer = ""
+            self.last_flush_time = time.time()
+            return
+
         if not self.stream_buffer or not self.agent_id:
+            self.last_flush_time = time.time()
+            return
+
+        cleaned = self._sanitize_stream(self.stream_buffer)
+        if not cleaned or len(cleaned.strip()) < 10:
+            self.stream_buffer = ""
+            self.last_flush_time = time.time()
+            return
+
+        # Require a minimum signal-to-noise ratio (printables)
+        printable_chars = sum(ch.isalnum() for ch in cleaned)
+        if printable_chars == 0 or (printable_chars / max(len(cleaned), 1)) < 0.3:
+            self.stream_buffer = ""
             self.last_flush_time = time.time()
             return
 
@@ -400,7 +421,7 @@ class CSPSidecar:
         payload = {
             "from": self.agent_id,
             "to": "broadcast",
-            "content": self.stream_buffer
+            "content": cleaned
         }
 
         try:
@@ -419,6 +440,24 @@ class CSPSidecar:
         finally:
             self.stream_buffer = ""
             self.last_flush_time = time.time()
+            # Keep sharing enabled for continuous communication
+
+    def _sanitize_stream(self, text: str) -> str:
+        """
+        Remove leftover ANSI fragments and control chatter that leak after stripping ESC.
+        This targets sequences like '38;2;...' and '?2026h' that show up when ESC is removed.
+        """
+        # Drop lingering CSI parameter fragments (color codes without ESC)
+        text = re.sub(r'(?:\d{1,3};)*\d{1,3}m', '', text)
+        # Drop DEC private mode toggles that may leak without ESC
+        text = re.sub(r'\?\d{3,4}[hl]', '', text)
+        # Drop stray ?25h/?25l cursor show/hide remnants
+        text = re.sub(r'\?25[hl]', '', text)
+        # Collapse excessive whitespace
+        text = re.sub(r'[ \t]+', ' ', text)
+        # Collapse more than 2 newlines
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()
 
     def gateway_listener(self):
         """WebSocket subscription with HTTP polling fallback"""
@@ -557,6 +596,9 @@ class CSPSidecar:
 
         sender = msg_obj.get('from', 'Unknown') # Gateway sends 'from' field
         content = msg_obj.get('content', '')
+
+        # Enable sharing for the next outbound chunk when we receive any message
+        self.share_enabled = True
 
         # Control channel: pause/resume
         if self._is_control_pause(content):

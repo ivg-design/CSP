@@ -237,6 +237,20 @@ class CSPGateway {
       res.json(messages);
     });
     
+    // List all registered agents (for discovery)
+    app.get('/agents', (req, res) => {
+        const agentList = [];
+        for (const [agentId, agent] of this.agents) {
+            agentList.push({
+                id: agentId,
+                name: agent.name,
+                lastSeen: agent.lastSeen,
+                online: (Date.now() - agent.lastSeen) < 60000
+            });
+        }
+        res.json(agentList);
+    });
+
     // Unregister
     app.delete('/agent/:agentId', (req, res) => {
         const agentId = req.params.agentId;

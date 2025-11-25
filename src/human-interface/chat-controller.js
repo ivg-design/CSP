@@ -61,6 +61,25 @@ class HumanChatController {
     }
   }
 
+  async listAgents() {
+    try {
+      const res = await this.client.get('/agents');
+      const agents = res.data;
+      if (agents.length === 0) {
+        console.log('\n📋 No agents connected\n');
+      } else {
+        console.log('\n📋 Connected Agents:');
+        agents.forEach(a => {
+          const status = a.online ? '🟢' : '🔴';
+          console.log(`  ${status} ${a.id} (${a.name})`);
+        });
+        console.log('');
+      }
+    } catch (error) {
+      console.error('❌ Failed to list agents:', error.message);
+    }
+  }
+
   startWebSocketListener() {
     // Try WebSocket first, fall back to HTTP polling
     if (this.tryWebSocketConnection()) {
@@ -212,15 +231,43 @@ async function main() {
             return;
         }
 
+        // Handle special commands
+        if (input === '/agents' || input === '/list') {
+            await controller.listAgents();
+            rl.prompt();
+            return;
+        }
+
+        if (input === '/help') {
+            console.log('\nCommands:');
+            console.log('  @agent message  - Send to specific agent (e.g., @claude hello)');
+            console.log('  @all message    - Broadcast to all agents');
+            console.log('  message         - Broadcast to all agents');
+            console.log('  /agents         - List connected agents');
+            console.log('  /help           - Show this help\n');
+            rl.prompt();
+            return;
+        }
+
         if (input.startsWith('@')) {
-            // Direct message: @claude hello
-            const parts = input.split(' ');
-            const target = parts[0].substring(1);
-            const msg = parts.slice(1).join(' ');
-            await controller.sendMessage(msg, target);
+            // Direct message: @claude hello or @all hello
+            const spaceIndex = input.indexOf(' ');
+            if (spaceIndex === -1) {
+                console.log('Usage: @agent message');
+                rl.prompt();
+                return;
+            }
+            const target = input.substring(1, spaceIndex).toLowerCase();
+            const msg = input.substring(spaceIndex + 1);
+
+            if (target === 'all') {
+                await controller.sendMessage(msg, 'broadcast');
+            } else {
+                await controller.sendMessage(msg, target);
+            }
         } else {
             // Broadcast
-            await controller.sendMessage(input);
+            await controller.sendMessage(input, 'broadcast');
         }
 
         rl.prompt();
