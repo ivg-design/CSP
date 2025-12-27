@@ -770,8 +770,20 @@ class CSPSidecar:
         sender = msg_obj.get('from', 'Unknown') # Gateway sends 'from' field
         content = msg_obj.get('content', '')
 
-        # Enable sharing for the next outbound chunk when we receive any message
-        self.share_enabled = True
+        # FIXED: Do NOT auto-enable sharing - it causes feedback loops with TUI apps
+        # Output sharing is ONE-WAY by design: Human → Agents only
+        # Use /share command to explicitly enable if needed
+        # self.share_enabled = True  # DISABLED - was causing ANSI spam flood
+
+        # Handle /share and /noshare commands
+        if content.strip().lower() == '/share':
+            self.share_enabled = True
+            print(f"[CSP] Output sharing ENABLED for {self.agent_id}", file=sys.stderr)
+            return
+        if content.strip().lower() == '/noshare':
+            self.share_enabled = False
+            print(f"[CSP] Output sharing DISABLED for {self.agent_id}", file=sys.stderr)
+            return
 
         # Control channel: pause/resume
         if self._is_control_pause(content):
@@ -797,11 +809,16 @@ class CSPSidecar:
             self._write_injection(sender, content.lstrip("!").strip())
             return
 
-        # Flow control: only inject when idle, otherwise queue (priority normal)
-        if self.flow.is_idle():
-            self._write_injection(sender, content)
-        else:
-            self.flow.enqueue(sender, content, priority="normal")
+        # FIXED: TUI apps (Claude, Codex) constantly refresh, so is_idle() rarely returns True.
+        # For now, inject immediately. Flow control can be re-enabled later with better heuristics.
+        # Old code queued messages that never got delivered because the queue drain also needs is_idle().
+        self._write_injection(sender, content)
+
+        # Original flow control (disabled - causes messages to queue forever in TUI apps):
+        # if self.flow.is_idle():
+        #     self._write_injection(sender, content)
+        # else:
+        #     self.flow.enqueue(sender, content, priority="normal")
 
     def _write_injection(self, sender, content):
         """Write a formatted injection to the agent PTY."""

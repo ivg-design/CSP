@@ -56,7 +56,7 @@ while true; do
     
     case $choice in
         1)
-            run_agent "Claude" "claude --dangerously-skip-permissions"
+            run_agent "Claude" "/Users/ivg/.claude/local/claude --dangerously-skip-permissions"
             ;;
         2)
             run_agent "Gemini" "gemini --yolo"
