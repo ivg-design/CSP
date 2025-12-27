@@ -11,6 +11,7 @@
 2. **Autonomous Operation** - No waiting for human input
 3. **Proactive Behavior** - Continuously monitor and act
 4. **Context Awareness** - Review all messages before deciding
+5. **Deterministic Enforcement** - Gateway enforces critical rules (do not rely on LLM compliance)
 
 ---
 
@@ -33,19 +34,27 @@ STATES:
 └── ERROR_RECOVER  - Handle unexpected states
 ```
 
+### 1.1 Gateway-Owned State Transitions (Required)
+
+The gateway must be the source of truth for mode/turn progression. The LLM
+is advisory only. The gateway should:
+- Advance turns on timeout even if the orchestrator is silent.
+- Advance turns when the current agent responds.
+- Persist `lastTurnChange` and compute elapsed time.
+- Allow the orchestrator to announce/coordinate, but never gate progression.
+
 ### 2. Heartbeat Mechanism
 
-**Problem:** LLM agents can "fall asleep" if no input arrives.
+**Problem:** LLM agents can "fall asleep" if no input arrives (including in freeform).
 
-**Solution:** Gateway sends periodic heartbeat messages to orchestrator:
+**Solution:** Gateway sends periodic heartbeat messages to orchestrator in ALL modes:
 
 ```javascript
 // In gateway, add heartbeat timer
 setInterval(() => {
-  if (this.orchestration.mode !== 'freeform') {
-    this.routeMessage('SYSTEM', '[HEARTBEAT] Check orchestration state', 'orchestrator');
-  }
-}, 30000); // Every 30 seconds
+  // Always send heartbeat to keep orchestrator active
+  this.routeMessage('SYSTEM', '[HEARTBEAT] Check orchestration state', 'orchestrator');
+}, 30000);
 ```
 
 Orchestrator responds to heartbeat with state check:
@@ -57,6 +66,13 @@ Time waiting: 45s
 Action: Agent has not responded. Sending reminder.
 @claude You have been silent for 45 seconds. Please provide your response or say "pass" to skip.
 ```
+
+### 2.1 Heartbeat ACK Enforcement (Required)
+
+The orchestrator MUST respond to every heartbeat. If two consecutive heartbeats
+are missed, the gateway should:
+- Send a warning message to the orchestrator.
+- Re-inject the strict prompt or restart the orchestrator process.
 
 ### 3. Strict System Prompt
 
@@ -106,6 +122,22 @@ When you receive [HEARTBEAT]:
 4. Reply format:
    [ORCHESTRATOR] Heartbeat: STATE=X, ELAPSED=Ys, ACTION=Z
 
+=== ACTION-ONLY OUTPUT (HEARTBEAT RESPONSES ONLY) ===
+
+On every heartbeat, emit EXACTLY ONE action line:
+  ACTION: <command>
+
+Allowed actions:
+  ACTION: @mode.status
+  ACTION: @mode.set <mode> "<topic>" --rounds N
+  ACTION: @send.<agent> <message>
+  ACTION: @all <message>
+  ACTION: @query.log 100
+  ACTION: NOOP
+
+If multiple actions are needed, perform only the highest-priority action now
+and defer the rest to the next heartbeat.
+
 === TURN MANAGEMENT ===
 
 When announcing turns, use EXACTLY this format:
@@ -151,6 +183,7 @@ If state becomes unclear:
 - Do NOT skip the synthesis step
 - Do NOT allow overtime (enforce 2-min timeout)
 - Do NOT respond to agents asking you questions about the topic
+- Do NOT emit any text outside the ACTION-only format when responding to heartbeat
 ```
 
 ---
@@ -167,20 +200,19 @@ this.heartbeatInterval = null;
 
 // In setupHTTPServer, after orchestration endpoints
 this.heartbeatInterval = setInterval(() => {
-  // Only send heartbeat if in structured mode and orchestrator exists
-  if (this.orchestration.mode !== 'freeform' && this.agents.has('orchestrator')) {
+  // Always send heartbeat if orchestrator exists
+  const orchId = this.getOrchestratorId();
+  if (orchId) {
     const elapsed = Date.now() - this.orchestration.lastTurnChange;
     const msg = {
       id: this.generateMessageId(),
       timestamp: new Date().toISOString(),
       from: 'SYSTEM',
-      to: 'orchestrator',
+      to: orchId,
       content: `[HEARTBEAT] Elapsed: ${Math.round(elapsed/1000)}s, State: ${this.orchestration.mode}, Turn: ${this.getCurrentTurnAgent()}`,
       type: 'heartbeat'
     };
-    if (this.agents.has('orchestrator')) {
-      this.agents.get('orchestrator').messageQueue.push(msg);
-    }
+    this.agents.get(orchId).messageQueue.push(msg);
   }
 }, 30000);
 
@@ -189,7 +221,19 @@ this.heartbeatInterval = setInterval(() => {
 this.orchestration.lastTurnChange = Date.now();
 ```
 
-### B. Timeout Enforcement (Gateway)
+### B. Gateway-Owned Turn Advancement (Required)
+
+Advance turns when the current-turn agent responds, regardless of orchestrator action:
+
+```javascript
+// In routeMessage(), after message creation
+const current = this.getCurrentTurnAgent();
+if (current && message.from === current) {
+  this.advanceTurn(); // Same logic as /turn/next
+}
+```
+
+### C. Timeout Enforcement (Gateway-Owned)
 
 Add automatic turn advancement on timeout:
 
@@ -211,7 +255,7 @@ this.turnTimeoutInterval = setInterval(() => {
 }, 10000); // Check every 10 seconds
 ```
 
-### C. Sidecar: Orchestrator Detection
+### D. Sidecar: Orchestrator Detection
 
 In `csp_sidecar.py`, detect if this agent is the orchestrator:
 
@@ -226,23 +270,48 @@ if self.is_orchestrator:
     pass
 ```
 
-### D. Strict Response Validation
+### E. Strict Response Validation (Hard Gate)
 
 Add to gateway - reject invalid orchestrator messages:
 
 ```javascript
-// Validate orchestrator messages have required prefix
+// Validate orchestrator messages are command-only
 app.post('/message', (req, res) => {
   const { from, content } = req.body;
 
-  if (from === 'orchestrator' && !content.startsWith('[ORCHESTRATOR]')) {
-    // Log warning but still route (soft enforcement)
-    console.warn('[Gateway] Orchestrator message missing prefix');
+  const isOrchestrator = from && from.startsWith('orchestrator');
+  if (isOrchestrator) {
+    const allowed = [
+      /^@mode\.set\b/,
+      /^@mode\.status\b/,
+      /^@send\.[\w-]+\b/,
+      /^@all\b/,
+      /^@query\.log\b/,
+      /^NOOP\b/
+    ];
+    if (!allowed.some(re => re.test(content.trim()))) {
+      return res.status(400).json({ error: 'Invalid orchestrator command' });
+    }
   }
 
   // ... rest of routing
 });
 ```
+
+### F. Context Snapshot on Heartbeat (Recommended)
+
+Push a minimal context snapshot with each heartbeat so the orchestrator does not
+need to decide to call `@query.log`:
+- mode, round, currentTurn, elapsed
+- last N messages (e.g., 10) from in-memory history
+
+This guarantees context awareness without waiting for user input.
+
+### G. Orchestrator Identity and Restart Policy
+
+- Treat any agent ID that starts with `orchestrator` as the orchestrator.
+- If two consecutive heartbeats are missed, restart the orchestrator process
+  or re-inject the strict prompt.
 
 ---
 
