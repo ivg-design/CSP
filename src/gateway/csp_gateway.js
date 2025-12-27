@@ -69,17 +69,40 @@ class CSPGateway {
   loadHistory() {
     try {
       if (!fs.existsSync(this.historyFile)) return;
-      const lines = fs.readFileSync(this.historyFile, 'utf8')
-        .split('\n')
-        .filter(line => line.trim())
-        .slice(-this.MAX_HISTORY);
-      for (const line of lines) {
-        try {
-          this.chatHistory.push(JSON.parse(line));
-        } catch {
-          // Skip malformed lines
+
+      // Check file size to avoid memory issues with very large files
+      const stats = fs.statSync(this.historyFile);
+      const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit
+
+      if (stats.size > MAX_FILE_SIZE) {
+        console.warn(`[Gateway] History file too large (${Math.round(stats.size / 1024 / 1024)}MB), loading last portion only`);
+        // For large files, read only the tail portion
+        const fd = fs.openSync(this.historyFile, 'r');
+        const buffer = Buffer.alloc(MAX_FILE_SIZE);
+        const bytesRead = fs.readSync(fd, buffer, 0, MAX_FILE_SIZE, stats.size - MAX_FILE_SIZE);
+        fs.closeSync(fd);
+        const content = buffer.toString('utf8', 0, bytesRead);
+        // Find first complete line (skip partial line at start)
+        const firstNewline = content.indexOf('\n');
+        const lines = content.substring(firstNewline + 1).split('\n').filter(l => l.trim()).slice(-this.MAX_HISTORY);
+        for (const line of lines) {
+          try {
+            this.chatHistory.push(JSON.parse(line));
+          } catch { /* Skip malformed */ }
+        }
+      } else {
+        // Small file - read entirely
+        const lines = fs.readFileSync(this.historyFile, 'utf8')
+          .split('\n')
+          .filter(line => line.trim())
+          .slice(-this.MAX_HISTORY);
+        for (const line of lines) {
+          try {
+            this.chatHistory.push(JSON.parse(line));
+          } catch { /* Skip malformed */ }
         }
       }
+      console.log(`[Gateway] Loaded ${this.chatHistory.length} messages from history`);
     } catch (error) {
       console.error(`[Gateway] Failed to load history: ${error.message}`);
     }
@@ -266,6 +289,16 @@ class CSPGateway {
   // HTTP server setup with security
   setupHTTPServer() {
     const app = express();
+
+    // Rate limiting to prevent abuse
+    const limiter = rateLimit({
+      windowMs: this.config.rateLimitWindow,
+      max: this.config.rateLimitMax,
+      message: { error: 'Too many requests, please try again later' },
+      standardHeaders: true,
+      legacyHeaders: false,
+    });
+    app.use(limiter);
 
     app.use(express.json({ limit: `${Math.floor(this.config.maxMessageSize / 1024)}kb` }));
     app.use(this.authenticateToken.bind(this));

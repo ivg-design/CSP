@@ -67,32 +67,69 @@ echo -e "${BLUE}🖥️  Configuring tmux session '${SESSION_NAME}'...${NC}"
 
 "$TMUX_BIN" new-session -d -s "$SESSION_NAME" -n "CSP-Main" -c "$PROJECT_ROOT" || { echo -e "${RED}❌ tmux new-session failed${NC}"; exit 1; }
 "$TMUX_BIN" split-window -v -p 75 -t "$SESSION_NAME:0.0" -c "$PROJECT_ROOT"   # Top 25%, bottom 75%
-"$TMUX_BIN" select-pane -t "$SESSION_NAME:0.1"
-"$TMUX_BIN" split-window -h -t "$SESSION_NAME:0.1" -c "$PROJECT_ROOT"
-"$TMUX_BIN" split-window -h -t "$SESSION_NAME:0.2" -c "$PROJECT_ROOT"
+
+if [[ "${CSP_ORCHESTRATOR:-0}" == "1" ]]; then
+  "$TMUX_BIN" select-pane -t "$SESSION_NAME:0.1"
+  "$TMUX_BIN" split-window -h -p 50 -t "$SESSION_NAME:0.1" -c "$PROJECT_ROOT"
+  "$TMUX_BIN" select-pane -t "$SESSION_NAME:0.1"
+  "$TMUX_BIN" split-window -h -p 50 -t "$SESSION_NAME:0.1" -c "$PROJECT_ROOT"
+  "$TMUX_BIN" select-pane -t "$SESSION_NAME:0.2"
+  "$TMUX_BIN" split-window -h -p 50 -t "$SESSION_NAME:0.2" -c "$PROJECT_ROOT"
+else
+  "$TMUX_BIN" select-pane -t "$SESSION_NAME:0.1"
+  "$TMUX_BIN" split-window -h -t "$SESSION_NAME:0.1" -c "$PROJECT_ROOT"
+  "$TMUX_BIN" split-window -h -t "$SESSION_NAME:0.2" -c "$PROJECT_ROOT"
+fi
 
 # Export env to all panes
-for pane in 0.0 0.1 0.2 0.3; do
+PANES=(0.0 0.1 0.2 0.3)
+if [[ "${CSP_ORCHESTRATOR:-0}" == "1" ]]; then
+  PANES=(0.0 0.1 0.2 0.3 0.4)
+fi
+
+for pane in "${PANES[@]}"; do
   "$TMUX_BIN" send-keys -t "$SESSION_NAME:$pane" "export CSP_AUTH_TOKEN='$CSP_AUTH_TOKEN'" C-m
   "$TMUX_BIN" send-keys -t "$SESSION_NAME:$pane" "export CSP_GATEWAY_URL='$CSP_GATEWAY_URL'" C-m
 done
 
-# Launch processes in panes (pane mapping after splits: 0 top, 1 bottom-left, 2 bottom-middle, 3 bottom-right)
+# Launch processes in panes
 "$TMUX_BIN" send-keys -t "$SESSION_NAME:0.0" "node src/human-interface/chat-controller.js" C-m
-"$TMUX_BIN" send-keys -t "$SESSION_NAME:0.1" "$SCRIPT_DIR/csp-agent-launcher.sh 'Agent-1'" C-m
-"$TMUX_BIN" send-keys -t "$SESSION_NAME:0.2" "$SCRIPT_DIR/csp-agent-launcher.sh 'Agent-2'" C-m
-"$TMUX_BIN" send-keys -t "$SESSION_NAME:0.3" "$SCRIPT_DIR/csp-agent-launcher.sh 'Agent-3'" C-m
+
+if [[ "${CSP_ORCHESTRATOR:-0}" == "1" ]]; then
+  ORCH_CMD="${CSP_ORCH_CMD:-/Users/ivg/.claude/local/claude --model haiku --dangerously-skip-permissions}"
+  ORCH_PROMPT_FILE="$PROJECT_ROOT/orchestrator_prompt.txt"
+  "$TMUX_BIN" send-keys -t "$SESSION_NAME:0.1" \
+    "python3 \"$PROJECT_ROOT/csp_sidecar.py\" --name Orchestrator --gateway-url \"$CSP_GATEWAY_URL\" --auth-token \"$CSP_AUTH_TOKEN\" --initial-prompt \"\$(cat \"$ORCH_PROMPT_FILE\" 2>/dev/null || echo 'You are the orchestrator.')\" --cmd $ORCH_CMD" C-m
+  "$TMUX_BIN" send-keys -t "$SESSION_NAME:0.2" "$SCRIPT_DIR/csp-agent-launcher.sh 'Agent-1'" C-m
+  "$TMUX_BIN" send-keys -t "$SESSION_NAME:0.3" "$SCRIPT_DIR/csp-agent-launcher.sh 'Agent-2'" C-m
+  "$TMUX_BIN" send-keys -t "$SESSION_NAME:0.4" "$SCRIPT_DIR/csp-agent-launcher.sh 'Agent-3'" C-m
+else
+  "$TMUX_BIN" send-keys -t "$SESSION_NAME:0.1" "$SCRIPT_DIR/csp-agent-launcher.sh 'Agent-1'" C-m
+  "$TMUX_BIN" send-keys -t "$SESSION_NAME:0.2" "$SCRIPT_DIR/csp-agent-launcher.sh 'Agent-2'" C-m
+  "$TMUX_BIN" send-keys -t "$SESSION_NAME:0.3" "$SCRIPT_DIR/csp-agent-launcher.sh 'Agent-3'" C-m
+fi
 
 # Titles
 "$TMUX_BIN" select-pane -t "$SESSION_NAME:0.0" -T "🎛️ Human Controller"
-"$TMUX_BIN" select-pane -t "$SESSION_NAME:0.1" -T "🤖 Agent Slot 1"
-"$TMUX_BIN" select-pane -t "$SESSION_NAME:0.2" -T "🤖 Agent Slot 2"
-"$TMUX_BIN" select-pane -t "$SESSION_NAME:0.3" -T "🤖 Agent Slot 3"
+if [[ "${CSP_ORCHESTRATOR:-0}" == "1" ]]; then
+  "$TMUX_BIN" select-pane -t "$SESSION_NAME:0.1" -T "🎭 Orchestrator"
+  "$TMUX_BIN" select-pane -t "$SESSION_NAME:0.2" -T "🤖 Agent Slot 1"
+  "$TMUX_BIN" select-pane -t "$SESSION_NAME:0.3" -T "🤖 Agent Slot 2"
+  "$TMUX_BIN" select-pane -t "$SESSION_NAME:0.4" -T "🤖 Agent Slot 3"
+else
+  "$TMUX_BIN" select-pane -t "$SESSION_NAME:0.1" -T "🤖 Agent Slot 1"
+  "$TMUX_BIN" select-pane -t "$SESSION_NAME:0.2" -T "🤖 Agent Slot 2"
+  "$TMUX_BIN" select-pane -t "$SESSION_NAME:0.3" -T "🤖 Agent Slot 3"
+fi
 
 "$TMUX_BIN" select-pane -t "$SESSION_NAME:0.0"
 
 echo -e "${GREEN}✅ System Ready!"
-echo -e "${BLUE}📋 Layout: 1 human controller (top), 3 agent slots (bottom)${NC}"
+if [[ "${CSP_ORCHESTRATOR:-0}" == "1" ]]; then
+  echo -e "${BLUE}📋 Layout: 1 human controller (top), orchestrator + 3 agent slots (bottom)${NC}"
+else
+  echo -e "${BLUE}📋 Layout: 1 human controller (top), 3 agent slots (bottom)${NC}"
+fi
 echo -e "${BLUE}🔧 Use Ctrl+B + arrow keys to navigate panes${NC}"
 echo -e "${BLUE}🔧 Use Ctrl+B + z to zoom current pane${NC}"
 echo "Attaching to tmux session..."

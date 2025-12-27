@@ -38,6 +38,7 @@ POLL_INTERVAL = 0.1
 STREAM_FLUSH_INTERVAL = 0.2  # seconds
 STREAM_CHUNK_THRESHOLD = 512  # characters
 STREAM_MAX_BUFFER = 8192      # characters
+INJECTION_TIMEOUT = float(os.environ.get('CSP_INJECTION_TIMEOUT', '0.5'))  # seconds, configurable
 
 
 class AgentCommandProcessor:
@@ -946,9 +947,10 @@ class CSPSidecar:
             self._write_injection(sender, content.lstrip("!").strip())
             return
 
-        # Timeout-based flow control: wait up to 500ms for idle, then inject anyway
+        # Timeout-based flow control: wait for idle, then inject
+        # Configurable via CSP_INJECTION_TIMEOUT env var (default 0.5s)
         # This balances safety (not corrupting active CLI) with reliability (messages get delivered)
-        max_wait = 0.5  # 500ms max wait
+        max_wait = INJECTION_TIMEOUT
         check_interval = 0.05  # 50ms between checks
         waited = 0.0
 

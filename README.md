@@ -23,6 +23,25 @@ npm install
 ./bin/start-llm-groupchat.sh
 ```
 
+## Orchestrator Mode (Optional)
+
+Launch with a dedicated orchestrator pane (lightweight Claude Haiku by default):
+
+```bash
+CSP_ORCHESTRATOR=1 ./bin/start-llm-groupchat.sh
+```
+
+You can override the orchestrator command:
+
+```bash
+CSP_ORCHESTRATOR=1 CSP_ORCH_CMD="claude --model haiku --dangerously-skip-permissions" ./bin/start-llm-groupchat.sh
+```
+
+The orchestrator can:
+- Set collaboration modes: `@mode.set debate "topic"`
+- Check status: `@mode.status`
+- Coordinate turn-taking across agents
+
 ## Key Features
 
 ### Real-Time Push Architecture
