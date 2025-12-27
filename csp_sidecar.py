@@ -23,12 +23,12 @@ import struct
 import signal
 import threading
 import time
-import requests
+import requests  # type: ignore[import-untyped]
 import json
 import argparse
 import collections
 import re
-import websocket
+import websocket  # type: ignore[import-untyped]
 import urllib.parse
 from datetime import datetime
 
@@ -119,6 +119,8 @@ class AgentCommandProcessor:
                 return self._execute_mode_set(args)
             elif command_type == 'mode_status':
                 return self._execute_mode_status(args)
+            else:
+                return f"[CSP: Unknown command type: {command_type}]"
         except Exception as e:
             return f"[CSP Error: {str(e)}]"
 
@@ -593,7 +595,7 @@ class CSPSidecar:
             except OSError:
                 break # Interrupted system call
 
-            if self.master_fd in r:
+            if self.master_fd is not None and self.master_fd in r:
                 # Data from Agent -> User
                 try:
                     data = os.read(self.master_fd, 1024)
@@ -636,7 +638,8 @@ class CSPSidecar:
                     break
 
                 # 1. Forward to Agent
-                os.write(self.master_fd, data)
+                if self.master_fd is not None:
+                    os.write(self.master_fd, data)
 
                 # 2. Optional: Log to Gateway (so others see what Human typed)
                 # self.send_to_gateway({"type": "human_input", "content": data.decode('utf-8', errors='ignore')})
@@ -796,7 +799,8 @@ class CSPSidecar:
     def websocket_listen(self):
         """Run WebSocket event loop"""
         try:
-            self.ws.run_forever()
+            if self.ws is not None:
+                self.ws.run_forever()
         except Exception as e:
             print(f"[CSP] WebSocket error: {e}", file=sys.stderr)
             self.ws_connected = False
@@ -952,6 +956,10 @@ class CSPSidecar:
 
     def _write_injection(self, sender, content, turn_signal=None):
         """Write a formatted injection to the agent PTY."""
+        if self.master_fd is None:
+            print(f"[CSP] Cannot inject: PTY not initialized", file=sys.stderr)
+            return
+
         # Add turn marker if this is a turn signal
         turn_marker = ""
         if turn_signal == 'your_turn':
