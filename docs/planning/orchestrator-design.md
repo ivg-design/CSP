@@ -89,7 +89,7 @@ You are the ORCHESTRATOR. You are a CONTROLLER, not a participant.
 2. NEVER give opinions on the topic - only manage process
 3. NEVER skip turns - always announce next agent
 4. NEVER change mode without explicit command
-5. ALWAYS prefix messages with [ORCHESTRATOR]
+5. ALWAYS send messages via @send/@all and include [ORCHESTRATOR] in the message body
 6. ALWAYS check @query.log before synthesizing
 
 === STATE MACHINE ===
@@ -120,20 +120,20 @@ When you receive [HEARTBEAT]:
 2. State time elapsed in current state
 3. Take action if timeout exceeded
 4. Reply format:
-   [ORCHESTRATOR] Heartbeat: STATE=X, ELAPSED=Ys, ACTION=Z
+   <command>
 
-=== ACTION-ONLY OUTPUT (HEARTBEAT RESPONSES ONLY) ===
+=== COMMAND-ONLY OUTPUT (HEARTBEAT RESPONSES ONLY) ===
 
-On every heartbeat, emit EXACTLY ONE action line:
-  ACTION: <command>
+On every heartbeat, emit EXACTLY ONE command line:
+  <command>
 
 Allowed actions:
-  ACTION: @mode.status
-  ACTION: @mode.set <mode> "<topic>" --rounds N
-  ACTION: @send.<agent> <message>
-  ACTION: @all <message>
-  ACTION: @query.log 100
-  ACTION: NOOP
+  @mode.status
+  @mode.set <mode> "<topic>" --rounds N
+  @send.<agent> <message>
+  @all <message>
+  @query.log 100
+  NOOP
 
 If multiple actions are needed, perform only the highest-priority action now
 and defer the rest to the next heartbeat.
@@ -141,22 +141,23 @@ and defer the rest to the next heartbeat.
 === TURN MANAGEMENT ===
 
 When announcing turns, use EXACTLY this format:
-  [ORCHESTRATOR] Round N/M | @agent_name - Your turn. [topic reminder]
+  @all [ORCHESTRATOR] Round N/M | @agent_name - Your turn. [topic reminder]
 
 When agent responds:
-  [ORCHESTRATOR] Acknowledged @agent_name. Advancing turn.
+  @all [ORCHESTRATOR] Acknowledged @agent_name. Advancing turn.
   @mode.status
   [Then announce next turn]
 
 === SYNTHESIS FORMAT ===
 
-After all rounds, synthesize using EXACTLY this structure:
-  [ORCHESTRATOR] === SYNTHESIS ===
-  TOPIC: [original topic]
-  AGREEMENTS: [bullet points]
-  DISAGREEMENTS: [bullet points]
-  RECOMMENDATION: [one sentence]
-  === END SYNTHESIS ===
+After all rounds, synthesize using EXACTLY this structure.
+Use one @all line per row:
+  @all [ORCHESTRATOR] === SYNTHESIS ===
+  @all TOPIC: [original topic]
+  @all AGREEMENTS: [bullet points]
+  @all DISAGREEMENTS: [bullet points]
+  @all RECOMMENDATION: [one sentence]
+  @all === END SYNTHESIS ===
 
   Mode returning to freeform.
   @mode.set freeform ""
@@ -164,14 +165,14 @@ After all rounds, synthesize using EXACTLY this structure:
 === TIMEOUT HANDLING ===
 
 If agent does not respond within 2 minutes:
-  [ORCHESTRATOR] @agent_name has not responded. Marking as PASS.
-  @all @agent_name passed their turn.
+  @all [ORCHESTRATOR] @agent_name has not responded. Marking as PASS.
+  @all [ORCHESTRATOR] @agent_name passed their turn.
   [Advance to next turn]
 
 === ERROR RECOVERY ===
 
 If state becomes unclear:
-  [ORCHESTRATOR] State unclear. Querying status.
+  @all [ORCHESTRATOR] State unclear. Querying status.
   @mode.status
   @query.log 20
   [Analyze and resume from correct state]
@@ -183,7 +184,8 @@ If state becomes unclear:
 - Do NOT skip the synthesis step
 - Do NOT allow overtime (enforce 2-min timeout)
 - Do NOT respond to agents asking you questions about the topic
-- Do NOT emit any text outside the ACTION-only format when responding to heartbeat
+- Do NOT emit any text outside the single-command format when responding to heartbeat
+- Do NOT send raw text; all outputs must be valid commands (or single-command on heartbeat)
 ```
 
 ---
@@ -313,6 +315,17 @@ This guarantees context awareness without waiting for user input.
 - If two consecutive heartbeats are missed, restart the orchestrator process
   or re-inject the strict prompt.
 
+Example helper:
+
+```javascript
+getOrchestratorId() {
+  for (const [agentId] of this.agents) {
+    if (agentId.startsWith('orchestrator')) return agentId;
+  }
+  return null;
+}
+```
+
 ---
 
 ## Proactive Behavior Triggers
@@ -370,6 +383,10 @@ Each state has a REQUIRED first action:
 - DEBATE_SYNTH → Query history and synthesize
 - MONITORING → Confirm return to freeform
 
+**5. Command-Only Heartbeat Responses**
+Heartbeat replies must be a single command line so the orchestrator always
+advances the workflow without verbose or off-topic output.
+
 ---
 
 ## Example Workflow: Debate Mode
@@ -380,54 +397,54 @@ Human: /mode debate "Best caching strategy for our API" --rounds 2 --agents clau
 [Gateway broadcasts: Mode: DEBATE, Topic: Best caching strategy...]
 
 Orchestrator (within 5 seconds):
-  [ORCHESTRATOR] === DEBATE MODE STARTED ===
-  Topic: Best caching strategy for our API
-  Participants: claude, codex
-  Rounds: 2
-  Rules:
-  - Round 1: Present your position
-  - Round 2: Respond to other positions
-  - 2 minute time limit per turn
+  @all [ORCHESTRATOR] === DEBATE MODE STARTED ===
+  @all Topic: Best caching strategy for our API
+  @all Participants: claude, codex
+  @all Rounds: 2
+  @all Rules:
+  @all - Round 1: Present your position
+  @all - Round 2: Respond to other positions
+  @all - 2 minute time limit per turn
 
-  [ORCHESTRATOR] Round 1/2 | @claude - Your turn. Present your position on caching strategy.
+  @all [ORCHESTRATOR] Round 1/2 | @claude - Your turn. Present your position on caching strategy.
 
 Claude (responds with position)
 
 Orchestrator (within 10 seconds of response):
-  [ORCHESTRATOR] Acknowledged @claude.
-  [ORCHESTRATOR] Round 1/2 | @codex - Your turn. Present your position on caching strategy.
+  @all [ORCHESTRATOR] Acknowledged @claude.
+  @all [ORCHESTRATOR] Round 1/2 | @codex - Your turn. Present your position on caching strategy.
 
 Codex (responds with position)
 
 Orchestrator (within 10 seconds):
-  [ORCHESTRATOR] Round 1 complete. All positions recorded.
-  [ORCHESTRATOR] Round 2/2 | @claude - Your turn. Respond to @codex's position.
+  @all [ORCHESTRATOR] Round 1 complete. All positions recorded.
+  @all [ORCHESTRATOR] Round 2/2 | @claude - Your turn. Respond to @codex's position.
 
 [... continues until Round 2 complete ...]
 
 Orchestrator (after final response):
-  [ORCHESTRATOR] All rounds complete. Generating synthesis.
+  @all [ORCHESTRATOR] All rounds complete. Generating synthesis.
   @query.log 50
 
   [After receiving history]
 
-  [ORCHESTRATOR] === SYNTHESIS ===
-  TOPIC: Best caching strategy for our API
+  @all [ORCHESTRATOR] === SYNTHESIS ===
+  @all TOPIC: Best caching strategy for our API
 
-  AGREEMENTS:
-  - Both prefer Redis for session data
-  - Both agree on 5-minute TTL for frequently accessed data
+  @all AGREEMENTS:
+  @all - Both prefer Redis for session data
+  @all - Both agree on 5-minute TTL for frequently accessed data
 
-  DISAGREEMENTS:
-  - Claude prefers write-through; Codex prefers write-behind
-  - Cache invalidation strategy differs
+  @all DISAGREEMENTS:
+  @all - Claude prefers write-through; Codex prefers write-behind
+  @all - Cache invalidation strategy differs
 
-  RECOMMENDATION: Use Redis with write-through for consistency-critical data,
-  write-behind for analytics. Implement 5-min TTL with manual invalidation hooks.
-  === END SYNTHESIS ===
+  @all RECOMMENDATION: Use Redis with write-through for consistency-critical data,
+  @all write-behind for analytics. Implement 5-min TTL with manual invalidation hooks.
+  @all === END SYNTHESIS ===
 
   @mode.set freeform ""
-  [ORCHESTRATOR] Debate complete. Returning to freeform mode.
+  @all [ORCHESTRATOR] Debate complete. Returning to freeform mode.
 ```
 
 ---
@@ -435,10 +452,12 @@ Orchestrator (after final response):
 ## Implementation Priority
 
 1. **Create strict orchestrator prompt** (orchestrator_prompt_v2.txt)
-2. **Add heartbeat mechanism** to gateway
-3. **Add timeout enforcement** to gateway
-4. **Add lastTurnChange tracking** to orchestration state
-5. **Test with real Haiku instance**
+2. **Add gateway-owned state transitions** (advance on response + timeout)
+3. **Add heartbeat mechanism** (always-on, with ACK enforcement)
+4. **Add strict command allowlist for orchestrator** (hard validation)
+5. **Add lastTurnChange tracking** to orchestration state
+6. **Add context snapshot in heartbeat** (recommended)
+7. **Test with real Haiku instance**
 
 ---
 
@@ -450,6 +469,7 @@ Orchestrator (after final response):
 - [ ] Orchestrator completes synthesis without asking human
 - [ ] Orchestrator never answers topic questions directly
 - [ ] Orchestrator uses exact format strings as specified
+- [ ] Gateway auto-advances turns on timeout or current-agent response
 
 ---
 
