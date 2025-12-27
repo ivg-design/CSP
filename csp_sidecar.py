@@ -53,6 +53,11 @@ class AgentCommandProcessor:
             re.compile(r'@send\.([\w-]+)\s+(.+)'),  # @send.agent-name message (allows dashes)
             re.compile(r'@all\s+(.+)'),  # @all message
         ]
+        # Orchestrator command patterns (Phase 6)
+        self.mode_set_pattern = re.compile(
+            r'@mode\.set\s+(\w+)\s+"([^"]+)"(?:\s+--rounds\s+(\d+))?'
+        )
+        self.mode_status_pattern = re.compile(r'@mode\.status')
 
     def detect_commands(self, text: str) -> list:
         """Detect all @-commands in text. Returns list of (command_type, args)"""
@@ -84,6 +89,21 @@ class AgentCommandProcessor:
                 commands.append(('send_all', {'message': message}))
                 continue
 
+            # Check for @mode.set (orchestrator command)
+            match = self.mode_set_pattern.search(line)
+            if match:
+                mode = match.group(1)
+                topic = match.group(2)
+                rounds = int(match.group(3)) if match.group(3) else 3
+                commands.append(('mode_set', {'mode': mode, 'topic': topic, 'rounds': rounds}))
+                continue
+
+            # Check for @mode.status (orchestrator command)
+            match = self.mode_status_pattern.search(line)
+            if match:
+                commands.append(('mode_status', {}))
+                continue
+
         return commands
 
     def execute_command(self, command_type: str, args: dict) -> str:
@@ -95,6 +115,10 @@ class AgentCommandProcessor:
                 return self._execute_send_agent(args)
             elif command_type == 'send_all':
                 return self._execute_send_all(args)
+            elif command_type == 'mode_set':
+                return self._execute_mode_set(args)
+            elif command_type == 'mode_status':
+                return self._execute_mode_status(args)
         except Exception as e:
             return f"[CSP Error: {str(e)}]"
 
@@ -190,6 +214,80 @@ class AgentCommandProcessor:
                 return f"[CSP: Broadcast failed ({response.status_code})]"
         except Exception as e:
             return f"[CSP: Broadcast error - {str(e)}]"
+
+    def _execute_mode_set(self, args: dict) -> str:
+        """Set orchestration mode (orchestrator command)"""
+        try:
+            mode = args.get('mode', 'freeform')
+            topic = args.get('topic', '')
+            rounds = args.get('rounds', 3)
+
+            headers = {'X-Auth-Token': self.auth_token} if self.auth_token else {}
+
+            # Get list of connected agents (excluding Human)
+            agents_response = requests.get(
+                f"{self.gateway_url}/agents",
+                headers=headers,
+                timeout=2
+            )
+
+            agent_ids = []
+            if agents_response.status_code == 200:
+                agents = agents_response.json()
+                agent_ids = [a['id'] for a in agents if a['id'] != 'Human' and a['id'] != self.agent_id]
+
+            # Set the mode
+            payload = {
+                'mode': mode,
+                'topic': topic,
+                'rounds': rounds,
+                'agents': agent_ids
+            }
+
+            response = requests.post(
+                f"{self.gateway_url}/mode",
+                json=payload,
+                headers=headers,
+                timeout=2
+            )
+
+            if response.status_code in [200, 201]:
+                return f"[CSP: Mode set to {mode.upper()} - Topic: {topic}]"
+            else:
+                error = response.json().get('error', 'Unknown error')
+                return f"[CSP: Mode set failed - {error}]"
+        except Exception as e:
+            return f"[CSP: Mode set error - {str(e)}]"
+
+    def _execute_mode_status(self, args: dict) -> str:
+        """Get current orchestration mode status (orchestrator command)"""
+        try:
+            headers = {'X-Auth-Token': self.auth_token} if self.auth_token else {}
+
+            response = requests.get(
+                f"{self.gateway_url}/mode",
+                headers=headers,
+                timeout=2
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                mode = data.get('mode', 'freeform')
+                topic = data.get('topic', 'N/A')
+                round_num = data.get('round', 0) + 1
+                max_rounds = data.get('maxRounds', 3)
+                turn_order = data.get('turnOrder', [])
+                current_idx = data.get('currentTurnIndex', 0)
+                current_turn = turn_order[current_idx] if turn_order and current_idx < len(turn_order) else 'N/A'
+
+                if mode == 'freeform':
+                    return "[CSP: Mode=FREEFORM (no structured collaboration active)]"
+                else:
+                    return f"[CSP: Mode={mode.upper()}, Topic={topic}, Round={round_num}/{max_rounds}, CurrentTurn={current_turn}]"
+            else:
+                return f"[CSP: Status query failed ({response.status_code})]"
+        except Exception as e:
+            return f"[CSP: Status query error - {str(e)}]"
 
 
 class StreamCleaner:
