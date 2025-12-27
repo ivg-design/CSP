@@ -12,10 +12,22 @@ class CSPGateway {
     this.chatHistory = [];
     this.messageIdCounter = 0;
     this.wsConnections = new Set(); // Track WebSocket connections
+    this.MAX_HISTORY = 1000;
 
     // JSONL persistence configuration
     this.historyFile = options.historyFile || path.join(process.cwd(), 'csp_history.jsonl');
     this.initializeHistoryFile();
+    this.loadHistory();
+
+    // Orchestration state
+    this.orchestration = {
+      mode: 'freeform',
+      topic: null,
+      round: 0,
+      maxRounds: 3,
+      turnOrder: [],
+      currentTurnIndex: 0
+    };
 
     // Security configuration
     this.config = {
@@ -54,8 +66,31 @@ class CSPGateway {
     }
   }
 
+  loadHistory() {
+    try {
+      if (!fs.existsSync(this.historyFile)) return;
+      const lines = fs.readFileSync(this.historyFile, 'utf8')
+        .split('\n')
+        .filter(line => line.trim())
+        .slice(-this.MAX_HISTORY);
+      for (const line of lines) {
+        try {
+          this.chatHistory.push(JSON.parse(line));
+        } catch {
+          // Skip malformed lines
+        }
+      }
+    } catch (error) {
+      console.error(`[Gateway] Failed to load history: ${error.message}`);
+    }
+  }
+
   appendToHistory(message) {
     try {
+      this.chatHistory.push(message);
+      if (this.chatHistory.length > this.MAX_HISTORY) {
+        this.chatHistory.shift();
+      }
       const jsonLine = JSON.stringify(message) + '\n';
       fs.appendFileSync(this.historyFile, jsonLine, 'utf8');
     } catch (error) {
@@ -76,20 +111,26 @@ class CSPGateway {
     // But for this implementation, let's stick to the simplified logic:
     // The Sidecar expects the server to return { agentId }.
     
-    const agentId = name; // Use the requested name as ID for simplicity in this version, assuming uniqueness handling in launcher
+    const baseId = name.toLowerCase();
+    let finalId = baseId;
+    let counter = 1;
+    while (this.agents.has(finalId)) {
+      counter += 1;
+      finalId = `${baseId}-${counter}`;
+    }
 
-    this.agents.set(agentId, {
-      id: agentId,
-      name: name,
+    this.agents.set(finalId, {
+      id: finalId,
+      name: finalId,
       capabilities,
       lastSeen: Date.now(),
       messageQueue: []
     });
 
-    this.broadcastSystemMessage(`🟢 ${name} joined the conversation`);
-    console.log(`[Gateway] Agent ${name} registered as ${agentId}`);
+    this.broadcastSystemMessage(`${finalId} joined the conversation`);
+    console.log(`[Gateway] Agent ${finalId} registered`);
 
-    return agentId;
+    return finalId;
   }
 
   broadcastSystemMessage(content) {
@@ -102,8 +143,7 @@ class CSPGateway {
       type: 'system'
     };
 
-    this.chatHistory.push(message);
-    this.appendToHistory(message); // Persist to JSONL
+    this.appendToHistory(message); // Persist to JSONL + in-memory
 
     // Deliver to all agents
     for (const [agentId, agent] of this.agents) {
@@ -129,13 +169,12 @@ class CSPGateway {
       from: fromAgent,
       to: targetAgent || 'broadcast',
       content: content,
-      type: targetAgent ? 'direct' : 'broadcast'
+      type: targetAgent ? 'direct' : 'broadcast',
+      turnSignal: this.getTurnSignal(targetAgent),
+      currentTurn: this.getCurrentTurnAgent()
     };
 
-    // Store in history (in-memory)
-    this.chatHistory.push(message);
-
-    // Persist to JSONL file
+    // Persist to JSONL file + in-memory
     this.appendToHistory(message);
 
     // Update sender's last seen
@@ -161,6 +200,21 @@ class CSPGateway {
     this.broadcastWebSocket(message);
 
     return message;
+  }
+
+  getTurnSignal(targetAgent) {
+    const o = this.orchestration;
+    if (!o || o.mode === 'freeform') return null;
+    const current = o.turnOrder[o.currentTurnIndex];
+    if (targetAgent === current) return 'your_turn';
+    if (targetAgent && o.turnOrder.includes(targetAgent)) return 'turn_wait';
+    return null;
+  }
+
+  getCurrentTurnAgent() {
+    const o = this.orchestration;
+    if (!o || o.mode === 'freeform' || !o.turnOrder.length) return null;
+    return o.turnOrder[o.currentTurnIndex] || null;
   }
 
   // WebSocket broadcasting
@@ -190,7 +244,7 @@ class CSPGateway {
       if (now - agent.lastSeen > timeout) {
         console.log(`[Gateway] Cleaning up inactive agent: ${agentId}`);
         this.agents.delete(agentId);
-        this.broadcastSystemMessage(`🔴 ${agentId} disconnected (timeout)`);
+        this.broadcastSystemMessage(`${agentId} disconnected (timeout)`);
       }
     }
   }
@@ -341,12 +395,60 @@ class CSPGateway {
       }
     });
 
+    // Orchestration state
+    app.get('/mode', (req, res) => {
+      res.json(this.orchestration);
+    });
+
+    app.post('/mode', (req, res) => {
+      const { mode, topic, agents, rounds } = req.body;
+      const allowedModes = ['freeform', 'debate', 'consensus', 'autopilot'];
+      if (!allowedModes.includes(mode)) {
+        return res.status(400).json({ error: 'Invalid mode' });
+      }
+      this.orchestration = {
+        mode,
+        topic: topic || null,
+        round: 0,
+        maxRounds: rounds || 3,
+        turnOrder: agents || [],
+        currentTurnIndex: 0
+      };
+      this.broadcastSystemMessage(`Mode: ${mode.toUpperCase()}`);
+      if (topic) this.broadcastSystemMessage(`Topic: ${topic}`);
+      if (mode !== 'freeform' && this.orchestration.turnOrder.length > 0) {
+        this.broadcastSystemMessage(`@${this.orchestration.turnOrder[0]} - Your turn.`);
+      }
+      res.json({ success: true, orchestration: this.orchestration });
+    });
+
+    app.post('/turn/next', (req, res) => {
+      const o = this.orchestration;
+      if (o.mode === 'freeform') {
+        return res.status(400).json({ error: 'Not in structured mode' });
+      }
+      o.currentTurnIndex += 1;
+      if (o.currentTurnIndex >= o.turnOrder.length) {
+        o.currentTurnIndex = 0;
+        o.round += 1;
+        if (o.round >= o.maxRounds) {
+          this.broadcastSystemMessage(`${o.mode.toUpperCase()} complete.`);
+          o.mode = 'freeform';
+          return res.json({ complete: true });
+        }
+        this.broadcastSystemMessage(`Round ${o.round + 1}`);
+      }
+      const next = o.turnOrder[o.currentTurnIndex];
+      this.broadcastSystemMessage(`@${next} - Your turn.`);
+      res.json({ success: true, currentTurn: next, round: o.round });
+    });
+
     // Unregister
     app.delete('/agent/:agentId', (req, res) => {
         const agentId = req.params.agentId;
         if (this.agents.has(agentId)) {
             this.agents.delete(agentId);
-            this.broadcastSystemMessage(`🔴 ${agentId} disconnected`);
+            this.broadcastSystemMessage(`${agentId} disconnected`);
             res.json({ success: true });
         } else {
             res.status(404).json({ error: 'Not found' });

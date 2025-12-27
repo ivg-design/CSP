@@ -629,9 +629,11 @@ class CSPSidecar:
         text = re.sub(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?', '', text)
 
         # 3. Strip orphaned CSI parameters (no ESC prefix, leaked after ESC stripping)
-        # These end in cursor/erase commands: A-H, J, K, S, T, f, m, s, u
-        # Pattern: digits/semicolons followed by command letter, not part of words
-        text = re.sub(r'(?<![a-zA-Z\x1b])[\d;]+[A-HJKSTfmsu](?![a-zA-Z])', '', text)
+        # These are cursor/erase commands: A-H, J, K, S, T, f, m, s, u
+        # CONSERVATIVE: Only strip patterns with semicolons (definitely CSI params)
+        # This avoids false positives like "3m" (3 meters) or "10K" (10 thousand)
+        # Examples matched: "31;2H", "1;31m", ";0m" (but NOT "3m", "31m", "2J" alone)
+        text = re.sub(r'(?<![a-zA-Z\x1b])\d*;\d*[A-HJKSTfmsu](?![a-zA-Z])', '', text)
 
         # 4. Strip DEC private modes: ?NNNNh or ?NNNNl
         text = re.sub(r'\?\d+[hl]', '', text)
@@ -794,10 +796,10 @@ class CSPSidecar:
 
         # Handle turn signals (soft enforcement - always inject, but notify)
         if turn_signal == 'your_turn':
-            print(f"\n[CSP] 🎯 YOUR TURN - You are the active agent", file=sys.stderr)
+            print(f"\n[CSP] YOUR TURN - You are the active agent", file=sys.stderr)
         elif turn_signal == 'turn_wait':
             current_turn = msg_obj.get('currentTurn', 'unknown')
-            print(f"\n[CSP] ⏳ Waiting (current turn: {current_turn})", file=sys.stderr)
+            print(f"\n[CSP] WAITING (current turn: {current_turn})", file=sys.stderr)
 
         # Handle /share and /noshare commands
         if content.strip().lower() == '/share':
@@ -833,23 +835,29 @@ class CSPSidecar:
             self._write_injection(sender, content.lstrip("!").strip())
             return
 
-        # FIXED: TUI apps (Claude, Codex) constantly refresh, so is_idle() rarely returns True.
-        # For now, inject immediately. Flow control can be re-enabled later with better heuristics.
-        # Old code queued messages that never got delivered because the queue drain also needs is_idle().
-        self._write_injection(sender, content, turn_signal)
+        # Timeout-based flow control: wait up to 500ms for idle, then inject anyway
+        # This balances safety (not corrupting active CLI) with reliability (messages get delivered)
+        max_wait = 0.5  # 500ms max wait
+        check_interval = 0.05  # 50ms between checks
+        waited = 0.0
 
-        # Original flow control (disabled - causes messages to queue forever in TUI apps):
-        # if self.flow.is_idle():
-        #     self._write_injection(sender, content)
-        # else:
-        #     self.flow.enqueue(sender, content, priority="normal")
+        while waited < max_wait:
+            if self.flow.is_idle():
+                self._write_injection(sender, content, turn_signal)
+                return
+            time.sleep(check_interval)
+            waited += check_interval
+
+        # Timeout reached - inject anyway with warning (TUI apps rarely go idle)
+        print(f"[CSP] Warning: injecting message while agent may be busy", file=sys.stderr)
+        self._write_injection(sender, content, turn_signal)
 
     def _write_injection(self, sender, content, turn_signal=None):
         """Write a formatted injection to the agent PTY."""
         # Add turn marker if this is a turn signal
         turn_marker = ""
         if turn_signal == 'your_turn':
-            turn_marker = "🎯 YOUR TURN\n"
+            turn_marker = "[YOUR TURN]\n"
 
         injection = f"\n{turn_marker}[Context: Message from {sender}]\n{content}\n"
         os.write(self.master_fd, injection.encode('utf-8'))
