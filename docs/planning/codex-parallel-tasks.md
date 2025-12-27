@@ -1,7 +1,8 @@
 # Codex Parallel Implementation Tasks
 
 **Date:** 2025-12-27
-**Context:** Claude (Opus) will work on Python/sidecar changes while Codex works on JavaScript/gateway changes.
+**Status:** ✅ ALL TASKS COMPLETE
+**Context:** Claude (Opus) worked on Python/sidecar changes while Codex worked on JavaScript/gateway changes.
 
 ---
 
@@ -47,7 +48,7 @@ Before starting, both agents agree on these interfaces:
 
 ## Codex Tasks (JavaScript/Bash)
 
-### Task 1: Gateway Unique ID Enforcement
+### Task 1: Gateway Unique ID Enforcement ✅ COMPLETE
 **File:** `src/gateway/csp_gateway.js`
 **Phase:** 1.3
 
@@ -73,7 +74,7 @@ return { success: true, agentId: finalId };
 
 ---
 
-### Task 2: History Persistence
+### Task 2: History Persistence ✅ COMPLETE
 **File:** `src/gateway/csp_gateway.js`
 **Phase:** 3
 
@@ -107,7 +108,7 @@ appendHistory(message) {
 
 ---
 
-### Task 3: Orchestration State and Endpoints
+### Task 3: Orchestration State and Endpoints ✅ COMPLETE
 **File:** `src/gateway/csp_gateway.js`
 **Phase:** 4
 
@@ -176,7 +177,7 @@ app.post('/turn/next', (req, res) => {
 
 ---
 
-### Task 4: Turn Signal in Message Envelope
+### Task 4: Turn Signal in Message Envelope ✅ COMPLETE
 **File:** `src/gateway/csp_gateway.js`
 **Phase:** 7.1
 
@@ -201,7 +202,7 @@ message.turnSignal = this.getTurnSignal(targetAgent);
 
 ---
 
-### Task 5: Human Interface Commands
+### Task 5: Human Interface Commands ✅ COMPLETE
 **File:** `src/human-interface/chat-controller.js`
 **Phase:** 5
 
@@ -217,11 +218,12 @@ Update `/help` output.
 
 ---
 
-### Task 6: Orchestrator Pane (Optional)
+### Task 6: Orchestrator Pane (Optional) ⏳ NOT IMPLEMENTED
 **Files:** `bin/start-llm-groupchat.sh`, `orchestrator_prompt.txt`
 **Phase:** 6
 
 Add optional 5th pane with Haiku. See development-roadmap-v1.md Phase 6 for details.
+**Note:** This is optional and not required for core functionality.
 
 ---
 
@@ -245,4 +247,30 @@ After Codex completes Tasks 1-4:
 
 ---
 
-*This document is for Codex to execute while Claude works on sidecar changes.*
+## Implementation Summary
+
+**Completed:** 2025-12-27
+
+### Claude (Sidecar) Tasks:
+- ✅ Phase 1.2: Stop ID truncation, use gateway-returned ID
+- ✅ Phase 2.1: Fix @send regex to allow dashed IDs
+- ✅ Phase 7.2: Add turn signal display in sidecar
+- ✅ Phase 8: Comprehensive ANSI sanitization
+
+### Codex (Gateway) Tasks:
+- ✅ Task 1: Unique ID enforcement
+- ✅ Task 2: History persistence (load/cap)
+- ✅ Task 3: Orchestration state and endpoints
+- ✅ Task 4: Turn signal in message envelope
+- ✅ Task 5: Human interface commands
+- ⏳ Task 6: Orchestrator pane (optional, not implemented)
+
+### Post-Review Fixes (joint):
+- ✅ Added `currentTurn` field to message envelope
+- ✅ Replaced emoji markers with ASCII
+- ✅ Fixed ANSI scrubber false positives
+- ✅ Added timeout-based flow control (500ms max wait)
+
+---
+
+*This document was used for parallel implementation between Claude and Codex.*

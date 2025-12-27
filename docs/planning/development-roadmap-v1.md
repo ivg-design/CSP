@@ -19,10 +19,10 @@ CSP enables **real-time multi-agent group chat** where humans and AI agents (Cla
 | 1 | Claude fails to start | `os.execvp` doesn't resolve shell aliases | `csp_sidecar.py:395`, `csp-agent-launcher.sh:59` | **FIXED** |
 | 2 | ANSI spam / feedback loop | `share_enabled = True` on every inbound message | `csp_sidecar.py:774` | **FIXED** |
 | 3 | Messages never delivered | Flow control `is_idle()` blocks TUI apps | `csp_sidecar.py:812-816`, `csp_sidecar.py:249-267` | **FIXED** |
-| 4 | Agent ID collisions | `split('-')[0]` truncation | `csp_sidecar.py:346` | Pending |
-| 5 | Dashed IDs fail in `@send` | Regex `\w+` excludes dashes | `csp_sidecar.py:53` | Pending |
-| 6 | History not loaded on restart | Write-only JSONL, unbounded RAM | `csp_gateway.js:12-18` | Pending |
-| 7 | No orchestration modes | Missing state, endpoints, UI | Entire codebase | Pending |
+| 4 | Agent ID collisions | `split('-')[0]` truncation | `csp_sidecar.py:346` | **FIXED** |
+| 5 | Dashed IDs fail in `@send` | Regex `\w+` excludes dashes | `csp_sidecar.py:53` | **FIXED** |
+| 6 | History not loaded on restart | Write-only JSONL, unbounded RAM | `csp_gateway.js:12-18` | **FIXED** |
+| 7 | No orchestration modes | Missing state, endpoints, UI | Entire codebase | **FIXED** |
 
 ---
 
@@ -112,20 +112,20 @@ Puzldai debate phases:
 
 ## Phased Implementation Plan
 
-### Phase 0: Verify Fixes Already Applied ✅
+### Phase 0: Verify Fixes Already Applied ✅ COMPLETE
 
 | Task | Status |
 |------|--------|
 | Claude path in launcher | ✅ Fixed |
 | `share_enabled` auto-enable disabled | ✅ Fixed |
-| Flow control bypass for TUI apps | ✅ Fixed |
+| Flow control bypass for TUI apps | ✅ Fixed (timeout-based: 500ms max wait) |
 | `/share` and `/noshare` commands added | ✅ Fixed |
 
 **Verify:** Run CSP, send message from Human, confirm agents receive it.
 
 ---
 
-### Phase 1: Agent Identity (1-2 hours)
+### Phase 1: Agent Identity ✅ COMPLETE
 
 #### 1.1 Stop ID Truncation
 **File:** `csp_sidecar.py:346`
@@ -177,7 +177,7 @@ if response.status_code in [200, 201]:
 
 ---
 
-### Phase 2: Addressing Fixes (30 min)
+### Phase 2: Addressing Fixes ✅ COMPLETE
 
 #### 2.1 Allow Dashes in `@send` Regex
 **File:** `csp_sidecar.py:53`
@@ -197,7 +197,7 @@ All agent IDs are lowercase with optional dashes. Examples: `claude`, `codex-2`,
 
 ---
 
-### Phase 3: History Persistence (1 hour)
+### Phase 3: History Persistence ✅ COMPLETE
 
 #### 3.1 Load History on Startup
 **File:** `src/gateway/csp_gateway.js` constructor
@@ -241,7 +241,7 @@ appendHistory(message) {
 
 ---
 
-### Phase 4: Orchestration State (2 hours)
+### Phase 4: Orchestration State ✅ COMPLETE
 
 #### 4.1 Add State to Gateway
 **File:** `src/gateway/csp_gateway.js` constructor
@@ -346,7 +346,7 @@ app.post('/turn/next', (req, res) => {
 
 ---
 
-### Phase 5: Human Interface Commands (1 hour)
+### Phase 5: Human Interface Commands ✅ COMPLETE
 
 **File:** `src/human-interface/chat-controller.js`
 
@@ -501,7 +501,7 @@ if command_type == 'mode_status':
 
 ---
 
-### Phase 7: Soft Turn Signals (1 hour)
+### Phase 7: Soft Turn Signals ✅ COMPLETE
 
 #### 7.1 Gateway Tags Messages
 ```javascript
@@ -541,7 +541,7 @@ def inject_message(self, msg_obj):
 
 ---
 
-### Phase 8: Improved ANSI Filtering (Optional, 1 hour)
+### Phase 8: Improved ANSI Filtering ✅ COMPLETE
 
 If shared output still contains artifacts, upgrade `_sanitize_stream()`:
 
@@ -599,36 +599,36 @@ All IDs are lowercase, dashes allowed. Multiple instances get suffixes: `claude`
 
 ## Validation Checklist
 
-- [ ] Claude launches without alias errors
-- [ ] Messages delivered to agents (not queued forever)
-- [ ] No ANSI spam after messaging
-- [ ] `/share` and `/noshare` work
-- [ ] Multiple agents have unique IDs
-- [ ] `@send.agent-name` works with dashes
-- [ ] History survives gateway restart
-- [ ] `/mode debate "topic"` starts debate
-- [ ] Turn announcements appear
-- [ ] Orchestrator can drive mode changes
-- [ ] Soft turn signals display correctly
+- [x] Claude launches without alias errors
+- [x] Messages delivered to agents (timeout-based flow control)
+- [x] No ANSI spam after messaging (conservative CSI stripping)
+- [x] `/share` and `/noshare` work
+- [x] Multiple agents have unique IDs (gateway enforces uniqueness)
+- [x] `@send.agent-name` works with dashes
+- [x] History survives gateway restart (JSONL loaded on startup)
+- [x] `/mode debate "topic"` starts debate
+- [x] Turn announcements appear
+- [ ] Orchestrator can drive mode changes (Phase 6 - Optional, not yet implemented)
+- [x] Soft turn signals display correctly (ASCII markers: [YOUR TURN], [WAITING])
 
 ---
 
 ## Implementation Order
 
-| Priority | Phase | Effort | Dependencies |
-|----------|-------|--------|--------------|
-| 🔴 Critical | 0: Verify fixes | 10 min | None |
-| 🟠 High | 1: Agent identity | 1-2 hr | Phase 0 |
-| 🟠 High | 2: Addressing fixes | 30 min | Phase 1 |
-| 🟡 Medium | 3: History persistence | 1 hr | None |
-| 🟡 Medium | 4: Orchestration state | 2 hr | None |
-| 🟡 Medium | 5: Human commands | 1 hr | Phase 4 |
-| 🟢 Low | 6: Orchestrator pane | 2 hr | Phase 4, 5 |
-| 🟢 Low | 7: Turn signals | 1 hr | Phase 4 |
-| ⚪ Optional | 8: Better ANSI filter | 1 hr | None |
-| ⚪ Optional | 9: Documentation | 30 min | All |
+| Priority | Phase | Effort | Dependencies | Status |
+|----------|-------|--------|--------------|--------|
+| 🔴 Critical | 0: Verify fixes | 10 min | None | ✅ DONE |
+| 🟠 High | 1: Agent identity | 1-2 hr | Phase 0 | ✅ DONE |
+| 🟠 High | 2: Addressing fixes | 30 min | Phase 1 | ✅ DONE |
+| 🟡 Medium | 3: History persistence | 1 hr | None | ✅ DONE |
+| 🟡 Medium | 4: Orchestration state | 2 hr | None | ✅ DONE |
+| 🟡 Medium | 5: Human commands | 1 hr | Phase 4 | ✅ DONE |
+| 🟢 Low | 6: Orchestrator pane | 2 hr | Phase 4, 5 | ⏳ Optional |
+| 🟢 Low | 7: Turn signals | 1 hr | Phase 4 | ✅ DONE |
+| ⚪ Optional | 8: Better ANSI filter | 1 hr | None | ✅ DONE |
+| ⚪ Optional | 9: Documentation | 30 min | All | ✅ DONE |
 
-**Total estimated effort:** ~10 hours
+**Status:** 9/10 phases complete. Phase 6 (Orchestrator pane) is optional and not yet implemented.
 
 ---
 

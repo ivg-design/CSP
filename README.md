@@ -2,51 +2,131 @@
 
 **Turn any CLI tool into a collaborative Multi-Agent Group Chat participant.**
 
-## 🌟 Overview
+## Overview
 
 CSP allows you to run native CLI agents (Claude, Gemini, Codex, plain Bash) in a **tmux** session where they can:
-1.  **Talk to each other** (Agent-to-Agent collaboration).
-2.  **Talk to you** (via Real-Time Push Chat).
-3.  **Retain full native fidelity** (Spinners, Colors, Interactive Prompts work perfectly).
+1. **Talk to each other** (Agent-to-Agent collaboration)
+2. **Talk to you** (via Real-Time Push Chat)
+3. **Collaborate in structured modes** (Debate, Consensus, Autopilot)
+4. **Retain full native fidelity** (Spinners, Colors, Interactive Prompts work perfectly)
 
-## 🚀 Quick Start
+## Quick Start
 
 ```bash
 # 1. Clone & Install
-git clone https://github.com/your-repo/csp.git
-cd csp
+git clone https://github.com/ivg-design/CSP.git
+cd CSP
 npm install
 
-# 2. Launch the Orchestrator
+# 2. Launch the Group Chat
 # Generates CSP_AUTH_TOKEN and starts Gateway + tmux
 ./bin/start-llm-groupchat.sh
 ```
 
-## ⚡ Key Features (v2)
+## Key Features
 
-### 📡 Real-Time Push Architecture
-*   **WebSockets / SSE**: Gateway pushes messages instantly to all agents.
-*   **Auto-Reconnect**: Clients handle network blips with exponential backoff.
-*   **HTTP Fallback**: Robust polling ensures delivery even if WS fails.
+### Real-Time Push Architecture
+- **WebSockets**: Gateway pushes messages instantly to all agents
+- **Auto-Reconnect**: Clients handle network blips with exponential backoff
+- **HTTP Fallback**: Robust polling ensures delivery even if WS fails
 
-### 🛡️ Smart Flow Control
-*   **Busy Detection**: Prevents injecting text while an agent is running a command (e.g., compilation).
-*   **Ghost Logs**: Visual indicator `[CSP queued 3 msgs]` shows you when messages are buffered.
-*   **Urgent Bypass**: Prefix `!` (e.g., `!stop`) to interrupt a busy agent.
-*   **Manual Control**: `/pause` and `/resume` commands.
+### Orchestration Modes
+- **Freeform** (default): Agents communicate freely
+- **Debate**: Structured rounds with turn-based responses
+- **Consensus**: Proposal and voting phases
+- **Autopilot**: Agent-driven task execution
 
-### 🔐 Secure & Simple
-*   **Auth**: Auto-generated `CSP_AUTH_TOKEN` secures the local mesh.
-*   **Env Config**: `CSP_GATEWAY_URL` automatically propagated to all panes.
+### Smart Flow Control
+- **Timeout-Based Injection**: Waits up to 500ms for idle, then injects safely
+- **Urgent Bypass**: Prefix `!` (e.g., `!stop`) to interrupt immediately
+- **Manual Control**: `/pause` and `/resume` commands
 
-## 📚 Documentation
+### Unique Agent Identity
+- Gateway enforces unique IDs: `claude`, `claude-2`, `claude-3`
+- Dashed IDs fully supported in addressing
 
-*   [**Architecture & Guide**](docs/current/LLMGroupChat.md): Full system design.
-*   [**Protocol Comparison**](docs/current/CSP_vs_A2A.md): CSP vs. A2A.
+### Secure & Simple
+- **Auth**: Auto-generated `CSP_AUTH_TOKEN` secures the local mesh
+- **Env Config**: `CSP_GATEWAY_URL` automatically propagated to all panes
 
-## 📂 Project Structure
+## Commands
 
-*   `bin/`: Launcher scripts (`start-llm-groupchat.sh`).
-*   `src/gateway/`: Node.js Message Broker (WS/HTTP).
-*   `src/human-interface/`: Human Chat CLI.
-*   `csp_sidecar.py`: Python PTY Proxy (Push Consumer).
+### Human Controller
+| Command | Description |
+|---------|-------------|
+| `@agent message` | Send to specific agent (e.g., `@claude hello`) |
+| `@all message` | Broadcast to all agents |
+| `message` | Broadcast to all agents (default) |
+| `/agents` | List connected agents |
+| `/mode <mode> <topic>` | Start structured mode (debate/consensus) |
+| `/status` | Show current mode and turn |
+| `/next` | Advance to next turn |
+| `/end` | Return to freeform mode |
+| `@query.log [limit]` | Show chat history |
+| `/help` | Show all commands |
+
+### Mode Command Examples
+```bash
+# Start a debate with 3 rounds
+/mode debate "Best approach to implement caching" --rounds 3 --agents claude,codex,gemini
+
+# Check current status
+/status
+
+# Advance to next turn
+/next
+
+# End structured mode
+/end
+```
+
+### Agent Commands (in sidecar)
+| Command | Description |
+|---------|-------------|
+| `@send.<agent> message` | Send to specific agent |
+| `@all message` | Broadcast to all |
+| `/share` | Enable output sharing |
+| `/noshare` | Disable output sharing |
+| `/pause` | Pause message injection |
+| `/resume` | Resume message injection |
+
+## Agent IDs
+All IDs are lowercase, dashes allowed. Multiple instances get suffixes:
+- First instance: `claude`
+- Second instance: `claude-2`
+- Third instance: `claude-3`
+
+## Documentation
+
+- [**Development Roadmap**](docs/planning/development-roadmap-v1.md): Implementation plan and status
+- [**Architecture Guide**](docs/current/LLMGroupChat.md): Full system design
+- [**Analysis Documents**](docs/analysis/): Bug analysis and proposals
+
+## Project Structure
+
+```
+CSP/
+├── bin/                    # Launcher scripts
+│   └── start-llm-groupchat.sh
+├── src/
+│   ├── gateway/            # Node.js Message Broker (WS/HTTP)
+│   │   └── csp_gateway.js
+│   └── human-interface/    # Human Chat CLI
+│       └── chat-controller.js
+├── csp_sidecar.py          # Python PTY Proxy
+└── docs/
+    ├── planning/           # Development plans
+    ├── analysis/           # Bug analysis docs
+    └── current/            # Architecture docs
+```
+
+## Recent Updates (2025-12-27)
+
+- Fixed Claude launch (full binary path instead of alias)
+- Fixed ANSI spam with conservative CSI stripping
+- Added timeout-based flow control for TUI apps
+- Added orchestration modes (debate, consensus)
+- Added turn signals with ASCII markers
+- Gateway enforces unique agent IDs
+- History persists across gateway restarts
+- Human interface supports `/mode`, `/status`, `/next`, `/end`
