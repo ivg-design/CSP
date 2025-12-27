@@ -50,7 +50,7 @@ class AgentCommandProcessor:
         # Command pattern: @command.subcommand args... or @agent_name message
         self.command_patterns = [
             re.compile(r'@query\.log(?:\s+(\d+))?(?:\s+from=([^\s]+))?(?:\s+to=([^\s]+))?'),  # @query.log [limit] [from=X] [to=Y]
-            re.compile(r'@send\.(\w+)\s+(.+)'),  # @send.agent_name message
+            re.compile(r'@send\.([\w-]+)\s+(.+)'),  # @send.agent-name message (allows dashes)
             re.compile(r'@all\s+(.+)'),  # @all message
         ]
 
@@ -342,8 +342,8 @@ class CSPSidecar:
             print("Error: No auth token provided - gateway requires authentication", file=sys.stderr)
             return False
 
-        # Use clean agent ID (base name only, no timestamp for easier addressing)
-        self.agent_id = self.agent_name.lower().replace(' ', '-').split('-')[0]
+        # Normalize agent name: lowercase, spaces to dashes, keep full name (no truncation)
+        requested_id = self.agent_name.lower().replace(' ', '-')
 
         headers = {"X-Auth-Token": self.auth_token}
 
@@ -351,7 +351,7 @@ class CSPSidecar:
             response = requests.post(
                 f"{self.gateway_url}/register",
                 json={
-                    "agentId": self.agent_id,
+                    "agentId": requested_id,
                     "capabilities": {"chat": True, "respond": True}
                 },
                 headers=headers,
@@ -360,6 +360,8 @@ class CSPSidecar:
 
             if response.status_code in [200, 201]:
                 data = response.json()
+                # Use gateway-assigned ID (may differ if duplicates exist, e.g., claude-2)
+                self.agent_id = data.get('agentId', requested_id)
                 print(f"Successfully registered as agent {self.agent_id}", file=sys.stderr)
                 # Initialize command processor now that we have agent_id
                 self.command_processor = AgentCommandProcessor(
@@ -617,19 +619,33 @@ class CSPSidecar:
 
     def _sanitize_stream(self, text: str) -> str:
         """
-        Remove leftover ANSI fragments and control chatter that leak after stripping ESC.
-        This targets sequences like '38;2;...' and '?2026h' that show up when ESC is removed.
+        Remove ANSI escape sequences and control characters from terminal output.
+        Handles complete CSI sequences and orphaned fragments from TUI apps.
         """
-        # Drop lingering CSI parameter fragments (color codes without ESC)
-        text = re.sub(r'(?:\d{1,3};)*\d{1,3}m', '', text)
-        # Drop DEC private mode toggles that may leak without ESC
-        text = re.sub(r'\?\d{3,4}[hl]', '', text)
-        # Drop stray ?25h/?25l cursor show/hide remnants
-        text = re.sub(r'\?25[hl]', '', text)
-        # Collapse excessive whitespace
+        # 1. Strip complete ANSI CSI sequences: ESC [ <params> <final>
+        text = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', text)
+
+        # 2. Strip complete OSC sequences: ESC ] ... (BEL or ESC \)
+        text = re.sub(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?', '', text)
+
+        # 3. Strip orphaned CSI parameters (no ESC prefix, leaked after ESC stripping)
+        # These end in cursor/erase commands: A-H, J, K, S, T, f, m, s, u
+        # Pattern: digits/semicolons followed by command letter, not part of words
+        text = re.sub(r'(?<![a-zA-Z\x1b])[\d;]+[A-HJKSTfmsu](?![a-zA-Z])', '', text)
+
+        # 4. Strip DEC private modes: ?NNNNh or ?NNNNl
+        text = re.sub(r'\?\d+[hl]', '', text)
+
+        # 5. Strip remaining standalone escape character
+        text = re.sub(r'\x1b', '', text)
+
+        # 6. Strip other control characters (except newline, tab)
+        text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+
+        # 7. Collapse excessive whitespace
         text = re.sub(r'[ \t]+', ' ', text)
-        # Collapse more than 2 newlines
         text = re.sub(r'\n{3,}', '\n\n', text)
+
         return text.strip()
 
     def gateway_listener(self):
@@ -769,11 +785,19 @@ class CSPSidecar:
 
         sender = msg_obj.get('from', 'Unknown') # Gateway sends 'from' field
         content = msg_obj.get('content', '')
+        turn_signal = msg_obj.get('turnSignal')  # 'your_turn' | 'turn_wait' | None
 
         # FIXED: Do NOT auto-enable sharing - it causes feedback loops with TUI apps
         # Output sharing is ONE-WAY by design: Human → Agents only
         # Use /share command to explicitly enable if needed
         # self.share_enabled = True  # DISABLED - was causing ANSI spam flood
+
+        # Handle turn signals (soft enforcement - always inject, but notify)
+        if turn_signal == 'your_turn':
+            print(f"\n[CSP] 🎯 YOUR TURN - You are the active agent", file=sys.stderr)
+        elif turn_signal == 'turn_wait':
+            current_turn = msg_obj.get('currentTurn', 'unknown')
+            print(f"\n[CSP] ⏳ Waiting (current turn: {current_turn})", file=sys.stderr)
 
         # Handle /share and /noshare commands
         if content.strip().lower() == '/share':
@@ -812,7 +836,7 @@ class CSPSidecar:
         # FIXED: TUI apps (Claude, Codex) constantly refresh, so is_idle() rarely returns True.
         # For now, inject immediately. Flow control can be re-enabled later with better heuristics.
         # Old code queued messages that never got delivered because the queue drain also needs is_idle().
-        self._write_injection(sender, content)
+        self._write_injection(sender, content, turn_signal)
 
         # Original flow control (disabled - causes messages to queue forever in TUI apps):
         # if self.flow.is_idle():
@@ -820,9 +844,14 @@ class CSPSidecar:
         # else:
         #     self.flow.enqueue(sender, content, priority="normal")
 
-    def _write_injection(self, sender, content):
+    def _write_injection(self, sender, content, turn_signal=None):
         """Write a formatted injection to the agent PTY."""
-        injection = f"\n[Context: Message from {sender}]\n{content}\n"
+        # Add turn marker if this is a turn signal
+        turn_marker = ""
+        if turn_signal == 'your_turn':
+            turn_marker = "🎯 YOUR TURN\n"
+
+        injection = f"\n{turn_marker}[Context: Message from {sender}]\n{content}\n"
         os.write(self.master_fd, injection.encode('utf-8'))
 
     def _is_control_pause(self, content: str) -> bool:
