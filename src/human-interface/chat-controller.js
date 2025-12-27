@@ -34,12 +34,12 @@ class HumanChatController {
             agentId: this.agentId,
             capabilities: { type: 'human' }
         });
-        console.log('✅ Connected as Human');
+        console.log('Connected as Human');
 
         // Try WebSocket first, fall back to polling
         this.startWebSocketListener();
     } catch (error) {
-        console.error('❌ Connection failed:', error.message);
+        console.error('Connection failed:', error.message);
         if (error.response && error.response.status === 401) {
              console.error('   (Invalid Auth Token)');
         }
@@ -57,7 +57,7 @@ class HumanChatController {
       // Local echo handled by looking at what we typed, but for group chat confirmation:
       // console.log(`(Sent)`);
     } catch (error) {
-      console.error('❌ Send failed:', error.message);
+      console.error('Send failed:', error.message);
     }
   }
 
@@ -66,17 +66,17 @@ class HumanChatController {
       const res = await this.client.get('/agents');
       const agents = res.data;
       if (agents.length === 0) {
-        console.log('\n📋 No agents connected\n');
+        console.log('\nNo agents connected\n');
       } else {
-        console.log('\n📋 Connected Agents:');
+        console.log('\nConnected Agents:');
         agents.forEach(a => {
-          const status = a.online ? '🟢' : '🔴';
+          const status = a.online ? 'online' : 'offline';
           console.log(`  ${status} ${a.id} (${a.name})`);
         });
         console.log('');
       }
     } catch (error) {
-      console.error('❌ Failed to list agents:', error.message);
+      console.error('Failed to list agents:', error.message);
     }
   }
 
@@ -91,13 +91,13 @@ class HumanChatController {
       const res = await this.client.get(`/history?${params}`);
       const data = res.data;
 
-      console.log(`\n📜 Chat History (${data.count} messages):`);
+      console.log(`\nChat History (${data.count} messages):`);
       console.log('─'.repeat(70));
 
       data.messages.forEach(msg => {
         const time = new Date(msg.timestamp).toLocaleTimeString();
-        const typeIcon = msg.type === 'system' ? '🔔' : '💬';
-        let line = `${typeIcon} [${time}] ${msg.from}`;
+        const typeLabel = msg.type === 'system' ? 'SYSTEM' : 'MSG';
+        let line = `${typeLabel} [${time}] ${msg.from}`;
         if (msg.to !== 'broadcast') line += ` → ${msg.to}`;
         line += `: ${msg.content}`;
         console.log(line);
@@ -106,7 +106,7 @@ class HumanChatController {
       console.log('─'.repeat(70));
       console.log(`Total messages in history: ${data.total}\n`);
     } catch (error) {
-      console.error('❌ Failed to query history:', error.message);
+      console.error('Failed to query history:', error.message);
     }
   }
 
@@ -225,10 +225,10 @@ class HumanChatController {
 
     if (msg.type === 'system') {
         console.log(`
-🔔 [${time}] ${msg.content}`);
+[${time}] ${msg.content}`);
     } else {
         console.log(`
-💬 [${time}] ${msg.from}: ${msg.content}`);
+[${time}] ${msg.from}: ${msg.content}`);
     }
     process.stdout.write('Human > '); // Re-print prompt
   }
@@ -268,12 +268,104 @@ async function main() {
             return;
         }
 
+        if (input.startsWith('/mode')) {
+            const rawArgs = input.slice(5).trim();
+            if (!rawArgs) {
+                console.log('Usage: /mode <mode> <topic> [--rounds N] [--agents a,b,c]');
+                rl.prompt();
+                return;
+            }
+
+            const tokens = [];
+            const tokenRe = /"([^"]+)"|'([^']+)'|([^\s]+)/g;
+            let match;
+            while ((match = tokenRe.exec(rawArgs)) !== null) {
+                tokens.push(match[1] || match[2] || match[3]);
+            }
+
+            const mode = tokens.shift();
+            const payload = { mode };
+            const topicParts = [];
+
+            for (let i = 0; i < tokens.length; i += 1) {
+                const token = tokens[i];
+                if (token === '--rounds' && tokens[i + 1]) {
+                    const rounds = parseInt(tokens[i + 1], 10);
+                    if (!Number.isNaN(rounds)) payload.rounds = rounds;
+                    i += 1;
+                    continue;
+                }
+                if (token === '--agents' && tokens[i + 1]) {
+                    payload.agents = tokens[i + 1].split(',').map(s => s.trim()).filter(Boolean);
+                    i += 1;
+                    continue;
+                }
+                topicParts.push(token);
+            }
+
+            if (topicParts.length > 0) {
+                payload.topic = topicParts.join(' ');
+            }
+
+            try {
+                await controller.client.post('/mode', payload);
+                console.log(`\nSwitched to ${mode} mode\n`);
+            } catch (error) {
+                console.error('Failed to set mode:', error.message);
+            }
+            rl.prompt();
+            return;
+        }
+
+        if (input === '/status') {
+            try {
+                const res = await controller.client.get('/mode');
+                const o = res.data;
+                console.log(`\nMode: ${o.mode}`);
+                console.log(`   Topic: ${o.topic || 'N/A'}`);
+                console.log(`   Round: ${o.round + 1}/${o.maxRounds}`);
+                if (o.turnOrder && o.turnOrder.length > 0) {
+                    console.log(`   Current turn: ${o.turnOrder[o.currentTurnIndex]}`);
+                }
+                console.log('');
+            } catch (error) {
+                console.error('Failed to get status:', error.message);
+            }
+            rl.prompt();
+            return;
+        }
+
+        if (input === '/next') {
+            try {
+                await controller.client.post('/turn/next');
+            } catch (error) {
+                console.error('Failed to advance turn:', error.message);
+            }
+            rl.prompt();
+            return;
+        }
+
+        if (input === '/end') {
+            try {
+                await controller.client.post('/mode', { mode: 'freeform' });
+                console.log('\nReturned to freeform mode\n');
+            } catch (error) {
+                console.error('Failed to end mode:', error.message);
+            }
+            rl.prompt();
+            return;
+        }
+
         if (input === '/help') {
             console.log('\nCommands:');
             console.log('  @agent message      - Send to specific agent (e.g., @claude hello)');
             console.log('  @all message        - Broadcast to all agents');
             console.log('  message             - Broadcast to all agents');
             console.log('  @query.log [limit]  - Show chat history (default: 50 messages)');
+            console.log('  /mode <mode> <topic> [--rounds N] [--agents a,b,c] - Set orchestration mode');
+            console.log('  /status             - Show current mode and turn');
+            console.log('  /next               - Advance to next turn');
+            console.log('  /end                - Return to freeform mode');
             console.log('  /agents             - List connected agents');
             console.log('  /help               - Show this help\n');
             rl.prompt();
