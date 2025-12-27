@@ -890,6 +890,7 @@ class CSPSidecar:
         sender = msg_obj.get('from', 'Unknown') # Gateway sends 'from' field
         content = msg_obj.get('content', '')
         turn_signal = msg_obj.get('turnSignal')  # 'your_turn' | 'turn_wait' | None
+        current_turn = msg_obj.get('currentTurn')  # Who currently has the turn
 
         # FIXED: Do NOT auto-enable sharing - it causes feedback loops with TUI apps
         # Output sharing is ONE-WAY by design: Human → Agents only
@@ -897,11 +898,19 @@ class CSPSidecar:
         # self.share_enabled = True  # DISABLED - was causing ANSI spam flood
 
         # Handle turn signals (soft enforcement - always inject, but notify)
+        # For broadcasts, turnSignal is null - derive from currentTurn instead
         if turn_signal == 'your_turn':
             print(f"\n[CSP] YOUR TURN - You are the active agent", file=sys.stderr)
         elif turn_signal == 'turn_wait':
-            current_turn = msg_obj.get('currentTurn', 'unknown')
-            print(f"\n[CSP] WAITING (current turn: {current_turn})", file=sys.stderr)
+            print(f"\n[CSP] WAITING (current turn: {current_turn or 'unknown'})", file=sys.stderr)
+        elif turn_signal is None and current_turn is not None:
+            # Broadcast message - derive turn status from currentTurn field
+            if current_turn.lower() == self.agent_id.lower():
+                turn_signal = 'your_turn'
+                print(f"\n[CSP] YOUR TURN - You are the active agent", file=sys.stderr)
+            elif current_turn:
+                turn_signal = 'turn_wait'
+                print(f"\n[CSP] WAITING (current turn: {current_turn})", file=sys.stderr)
 
         # Handle /share and /noshare commands
         if content.strip().lower() == '/share':
