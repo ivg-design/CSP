@@ -23,6 +23,27 @@ npm install
 ./bin/start-llm-groupchat.sh
 ```
 
+## Configuration (Optional)
+
+You can preload all launch parameters using a shell config file:
+
+```bash
+cp config/csp.env.example config/csp.env
+# Edit config/csp.env to set CSP_PORT, CSP_ORCHESTRATOR, CSP_*_CMD, etc.
+```
+
+The launcher will automatically source `config/csp.env` if it exists. You can override the path:
+
+```bash
+CSP_CONFIG_FILE=/path/to/csp.env ./bin/start-llm-groupchat.sh
+```
+
+Preflight CLI validation runs on launch. To fail fast when a configured CLI is missing:
+
+```bash
+CSP_STRICT_CLI_CHECK=1 ./bin/start-llm-groupchat.sh
+```
+
 ## Orchestrator Mode (Optional)
 
 Launch with a dedicated orchestrator pane (lightweight Claude Haiku by default):
@@ -54,6 +75,11 @@ The orchestrator can:
 - **Debate**: Structured rounds with turn-based responses
 - **Consensus**: Proposal and voting phases
 - **Autopilot**: Agent-driven task execution
+
+### Turn Timing
+- **Warning + Timeout**: Warn at 90s, timeout at 120s by default in structured modes
+- **Extend Turn**: Agents can send `@working <note>` (or `WORKING <note>`) to reset the timer
+- **Config**: `CSP_TURN_WARN_MS` and `CSP_TURN_TIMEOUT_MS`
 
 ### Smart Flow Control
 - **Timeout-Based Injection**: Waits up to 500ms for idle, then injects safely
@@ -104,6 +130,7 @@ The orchestrator can:
 |---------|-------------|
 | `@send.<agent> message` | Send to specific agent |
 | `@all message` | Broadcast to all |
+| `@working [note]` | Extend current turn timeout |
 | `/share` | Enable output sharing |
 | `/noshare` | Disable output sharing |
 | `/pause` | Pause message injection |
@@ -117,35 +144,40 @@ All IDs are lowercase, dashes allowed. Multiple instances get suffixes:
 
 ## Documentation
 
-- [**Development Roadmap**](docs/planning/development-roadmap-v1.md): Implementation plan and status
+- [**Roadmap**](ROADMAP.md): Project vision, milestones, and future plans
 - [**Architecture Guide**](docs/current/LLMGroupChat.md): Full system design
-- [**Analysis Documents**](docs/analysis/): Bug analysis and proposals
+- [**Refactoring Plan**](docs/planning/refactoring-plan.md): Code modularization tasks
+- [**Implementation Log**](docs/planning/implementation-log-2025-12-27.md): Detailed session notes
 
 ## Project Structure
 
 ```
 CSP/
 ├── bin/                    # Launcher scripts
-│   └── start-llm-groupchat.sh
+│   ├── start-llm-groupchat.sh
+│   └── csp-agent-launcher.sh
 ├── src/
 │   ├── gateway/            # Node.js Message Broker (WS/HTTP)
 │   │   └── csp_gateway.js
 │   └── human-interface/    # Human Chat CLI
 │       └── chat-controller.js
 ├── csp_sidecar.py          # Python PTY Proxy
+├── orchestrator_prompt.txt # Orchestrator system prompt
+├── config/                 # Configuration templates
+│   └── csp.env.example
+├── ROADMAP.md              # Project roadmap
 └── docs/
-    ├── planning/           # Development plans
-    ├── analysis/           # Bug analysis docs
-    └── current/            # Architecture docs
+    ├── current/            # Architecture docs
+    └── planning/           # Development plans
 ```
 
-## Recent Updates (2025-12-27)
+## Recent Updates (v0.1 - 2025-12-27)
 
-- Fixed Claude launch (full binary path instead of alias)
-- Fixed ANSI spam with conservative CSI stripping
-- Added timeout-based flow control for TUI apps
-- Added orchestration modes (debate, consensus)
-- Added turn signals with ASCII markers
-- Gateway enforces unique agent IDs
-- History persists across gateway restarts
-- Human interface supports `/mode`, `/status`, `/next`, `/end`
+- Gateway-owned turn management with auto-advance
+- Heartbeat system (30s interval) with context snapshots
+- Turn timeout enforcement (configurable warning + timeout)
+- `@working` command to extend turn timeout
+- Strict orchestrator command validation
+- Config file system (`config/csp.env`)
+- Preflight CLI validation on launch
+- Comprehensive documentation updates

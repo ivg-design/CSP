@@ -16,9 +16,9 @@ show_menu() {
     echo "--------------------------------"
     echo -e "Gateway: ${GREEN}$CSP_GATEWAY_URL${NC}"
     echo "--------------------------------"
-    echo "1. Claude (--dangerously-skip-permissions)"
-    echo "2. Gemini (--yolo)"
-    echo "3. Codex (--dangerously-bypass-approvals)"
+    echo "1. Claude"
+    echo "2. Gemini"
+    echo "3. Codex"
     echo "4. Custom Command..."
     echo "q. Quit (Close Pane)"
     echo ""
@@ -50,19 +50,27 @@ run_agent() {
     read
 }
 
+DEFAULT_CLAUDE_CMD="claude --dangerously-skip-permissions"
+DEFAULT_GEMINI_CMD="gemini"
+DEFAULT_CODEX_CMD="codex"
+
+CLAUDE_CMD="${CSP_CLAUDE_CMD:-$DEFAULT_CLAUDE_CMD}"
+GEMINI_CMD="${CSP_GEMINI_CMD:-$DEFAULT_GEMINI_CMD}"
+CODEX_CMD="${CSP_CODEX_CMD:-$DEFAULT_CODEX_CMD}"
+
 while true; do
     show_menu
     read -p "Select Agent > " choice
     
     case $choice in
         1)
-            run_agent "Claude" "/Users/ivg/.claude/local/claude --dangerously-skip-permissions"
+            run_agent "Claude" "$CLAUDE_CMD"
             ;;
         2)
-            run_agent "Gemini" "gemini --yolo"
+            run_agent "Gemini" "$GEMINI_CMD"
             ;;
         3)
-            run_agent "Codex" "codex --dangerously-bypass-approvals-and-sandbox"
+            run_agent "Codex" "$CODEX_CMD"
             ;;
         4)
             read -p "Enter Agent Name: " custom_name

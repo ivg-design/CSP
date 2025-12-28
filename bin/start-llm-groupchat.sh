@@ -8,6 +8,7 @@ TMUX_BIN="$(command -v tmux || true)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 GATEWAY_LOG="$PROJECT_ROOT/gateway.log"
+CONFIG_FILE_DEFAULT="$PROJECT_ROOT/config/csp.env"
 
 # Colors
 RED='\033[0;31m'
@@ -31,10 +32,65 @@ require_cmd() {
     fi
 }
 
+load_config() {
+    local cfg="${CSP_CONFIG_FILE:-$CONFIG_FILE_DEFAULT}"
+    if [[ -f "$cfg" ]]; then
+        echo -e "${BLUE}📄 Loading config: $cfg${NC}"
+        set -a
+        # shellcheck source=/dev/null
+        source "$cfg"
+        set +a
+    fi
+}
+
+check_cli_cmd() {
+    local label="$1"
+    local cmd="$2"
+    local strict="${CSP_STRICT_CLI_CHECK:-0}"
+    if [[ -z "$cmd" ]]; then
+        echo -e "${YELLOW}[preflight] ${label}: not configured${NC}"
+        return 0
+    fi
+    local bin="${cmd%% *}"
+    if [[ "$bin" == */* ]]; then
+        if [[ -x "$bin" ]]; then
+            echo -e "${GREEN}[preflight] ${label}: OK (${bin})${NC}"
+            return 0
+        fi
+    else
+        if command -v "$bin" >/dev/null 2>&1; then
+            echo -e "${GREEN}[preflight] ${label}: OK (${bin})${NC}"
+            return 0
+        fi
+    fi
+    echo -e "${RED}[preflight] ${label}: MISSING (${bin})${NC}"
+    if [[ "$strict" == "1" ]]; then
+        exit 1
+    fi
+    return 0
+}
+
+preflight_checks() {
+    echo -e "${BLUE}🔎 Running preflight checks...${NC}"
+    require_cmd tmux
+    require_cmd node
+    require_cmd python3
+    if [[ -z "${CSP_AUTH_TOKEN:-}" ]]; then
+        require_cmd openssl
+    fi
+
+    check_cli_cmd "Claude" "${CSP_CLAUDE_CMD:-claude --dangerously-skip-permissions}"
+    check_cli_cmd "Gemini" "${CSP_GEMINI_CMD:-gemini}"
+    check_cli_cmd "Codex" "${CSP_CODEX_CMD:-codex}"
+
+    if [[ "${CSP_ORCHESTRATOR:-0}" == "1" ]]; then
+        check_cli_cmd "Orchestrator" "${CSP_ORCH_CMD:-claude --model haiku --dangerously-skip-permissions}"
+    fi
+}
+
 echo -e "${BLUE}🚀 Initializing CSP Multi-Agent System...${NC}"
-require_cmd tmux
-require_cmd node
-require_cmd python3
+load_config
+preflight_checks
 
 # 0. Kill any existing processes
 echo -e "${YELLOW}🧹 Cleaning up any existing processes...${NC}"
@@ -50,7 +106,7 @@ if [[ -z "${CSP_AUTH_TOKEN:-}" ]]; then
     CSP_AUTH_TOKEN=$(openssl rand -hex 32)
     echo -e "${GREEN}🔑 Generated Auth Token: ${CSP_AUTH_TOKEN:0:8}...${NC}"
 fi
-export CSP_GATEWAY_URL="http://localhost:$CSP_PORT"
+export CSP_GATEWAY_URL="${CSP_GATEWAY_URL:-http://localhost:$CSP_PORT}"
 
 # 2. Start Gateway
 echo -e "${BLUE}📡 Starting Gateway on port $CSP_PORT...${NC}"
@@ -65,6 +121,7 @@ fi
 # 3. Setup tmux Session
 echo -e "${BLUE}🖥️  Configuring tmux session '${SESSION_NAME}'...${NC}"
 
+layout_start=$SECONDS
 "$TMUX_BIN" new-session -d -s "$SESSION_NAME" -n "CSP-Main" -c "$PROJECT_ROOT" || { echo -e "${RED}❌ tmux new-session failed${NC}"; exit 1; }
 "$TMUX_BIN" split-window -v -p 75 -t "$SESSION_NAME:0.0" -c "$PROJECT_ROOT"   # Top 25%, bottom 75%
 
@@ -81,6 +138,19 @@ else
   "$TMUX_BIN" split-window -h -t "$SESSION_NAME:0.2" -c "$PROJECT_ROOT"
 fi
 
+# tmux robustness: verify pane count
+expected_panes=4
+if [[ "${CSP_ORCHESTRATOR:-0}" == "1" ]]; then
+  expected_panes=5
+fi
+pane_count=$("$TMUX_BIN" list-panes -t "$SESSION_NAME" 2>/dev/null | wc -l | tr -d ' ')
+if [[ "$pane_count" != "$expected_panes" ]]; then
+  echo -e "${RED}❌ tmux pane count mismatch (${pane_count}/${expected_panes}).${NC}"
+  exit 1
+fi
+layout_elapsed=$((SECONDS - layout_start))
+echo -e "${BLUE}📊 tmux layout created in ${layout_elapsed}s${NC}"
+
 # Export env to all panes
 PANES=(0.0 0.1 0.2 0.3)
 if [[ "${CSP_ORCHESTRATOR:-0}" == "1" ]]; then
@@ -90,6 +160,9 @@ fi
 for pane in "${PANES[@]}"; do
   "$TMUX_BIN" send-keys -t "$SESSION_NAME:$pane" "export CSP_AUTH_TOKEN='$CSP_AUTH_TOKEN'" C-m
   "$TMUX_BIN" send-keys -t "$SESSION_NAME:$pane" "export CSP_GATEWAY_URL='$CSP_GATEWAY_URL'" C-m
+  "$TMUX_BIN" send-keys -t "$SESSION_NAME:$pane" "export CSP_CLAUDE_CMD='${CSP_CLAUDE_CMD:-claude --dangerously-skip-permissions}'" C-m
+  "$TMUX_BIN" send-keys -t "$SESSION_NAME:$pane" "export CSP_GEMINI_CMD='${CSP_GEMINI_CMD:-gemini}'" C-m
+  "$TMUX_BIN" send-keys -t "$SESSION_NAME:$pane" "export CSP_CODEX_CMD='${CSP_CODEX_CMD:-codex}'" C-m
 done
 
 # Launch processes in panes

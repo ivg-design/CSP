@@ -88,11 +88,11 @@ Puzldai debate phases:
 │                              TMUX SESSION                               │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                    🎛️  Human Controller                          │   │
+│  │                    Human Controller                             │   │
 │  │                    (chat-controller.js)                          │   │
 │  └─────────────────────────────────────────────────────────────────┘   │
 ├────────────────┬────────────────┬────────────────┬──────────────────────┤
-│ 🎭 Orchestrator│ 🤖 Claude      │ 💻 Codex       │ ✨ Gemini            │
+│ Orchestrator  │ Claude         │ Codex          │ Gemini              │
 │ (Haiku)        │ (Opus/Sonnet)  │                │                      │
 │ [Optional]     │                │                │                      │
 └────────────────┴────────────────┴────────────────┴──────────────────────┘
@@ -112,20 +112,20 @@ Puzldai debate phases:
 
 ## Phased Implementation Plan
 
-### Phase 0: Verify Fixes Already Applied ✅ COMPLETE
+### Phase 0: Verify Fixes Already Applied (Complete)
 
 | Task | Status |
 |------|--------|
-| Claude path in launcher | ✅ Fixed |
-| `share_enabled` auto-enable disabled | ✅ Fixed |
-| Flow control bypass for TUI apps | ✅ Fixed (timeout-based: 500ms max wait) |
-| `/share` and `/noshare` commands added | ✅ Fixed |
+| Claude path in launcher | Fixed |
+| `share_enabled` auto-enable disabled | Fixed |
+| Flow control bypass for TUI apps | Fixed (timeout-based: 500ms max wait) |
+| `/share` and `/noshare` commands added | Fixed |
 
 **Verify:** Run CSP, send message from Human, confirm agents receive it.
 
 ---
 
-### Phase 1: Agent Identity ✅ COMPLETE
+### Phase 1: Agent Identity (Complete)
 
 #### 1.1 Stop ID Truncation
 **File:** `csp_sidecar.py:346`
@@ -177,7 +177,7 @@ if response.status_code in [200, 201]:
 
 ---
 
-### Phase 2: Addressing Fixes ✅ COMPLETE
+### Phase 2: Addressing Fixes (Complete)
 
 #### 2.1 Allow Dashes in `@send` Regex
 **File:** `csp_sidecar.py:53`
@@ -197,7 +197,7 @@ All agent IDs are lowercase with optional dashes. Examples: `claude`, `codex-2`,
 
 ---
 
-### Phase 3: History Persistence ✅ COMPLETE
+### Phase 3: History Persistence (Complete)
 
 #### 3.1 Load History on Startup
 **File:** `src/gateway/csp_gateway.js` constructor
@@ -241,7 +241,7 @@ appendHistory(message) {
 
 ---
 
-### Phase 4: Orchestration State ✅ COMPLETE
+### Phase 4: Orchestration State (Complete)
 
 #### 4.1 Add State to Gateway
 **File:** `src/gateway/csp_gateway.js` constructor
@@ -283,12 +283,12 @@ app.post('/mode', (req, res) => {
     roundOutputs: {}
   };
 
-  this.broadcastSystemMessage(`🎭 Mode: ${mode.toUpperCase()}`);
-  if (topic) this.broadcastSystemMessage(`📋 Topic: ${topic}`);
+  this.broadcastSystemMessage(`Mode: ${mode.toUpperCase()}`);
+  if (topic) this.broadcastSystemMessage(`Topic: ${topic}`);
 
   if (mode !== 'freeform' && this.orchestration.turnOrder.length > 0) {
     const first = this.orchestration.turnOrder[0];
-    this.broadcastSystemMessage(`📢 Round 1 | @${first} - Your turn.`);
+    this.broadcastSystemMessage(`@${first} - Your turn.`);
   }
 
   res.json({ success: true, orchestration: this.orchestration });
@@ -323,16 +323,16 @@ app.post('/turn/next', (req, res) => {
     o.completedTurns.clear();
 
     if (o.round >= o.maxRounds) {
-      this.broadcastSystemMessage(`✅ ${o.mode.toUpperCase()} complete.`);
+      this.broadcastSystemMessage(`${o.mode.toUpperCase()} complete.`);
       o.mode = 'freeform';
       return res.json({ complete: true });
     }
 
-    this.broadcastSystemMessage(`📢 Round ${o.round + 1}`);
+    this.broadcastSystemMessage(`Round ${o.round + 1}`);
   }
 
   const nextAgent = o.turnOrder[o.currentTurnIndex];
-  this.broadcastSystemMessage(`📢 @${nextAgent} - Your turn.`);
+  this.broadcastSystemMessage(`@${nextAgent} - Your turn.`);
 
   res.json({
     success: true,
@@ -346,7 +346,7 @@ app.post('/turn/next', (req, res) => {
 
 ---
 
-### Phase 5: Human Interface Commands ✅ COMPLETE
+### Phase 5: Human Interface Commands (Complete)
 
 **File:** `src/human-interface/chat-controller.js`
 
@@ -371,7 +371,7 @@ if (input.startsWith('/mode ')) {
 if (input === '/status') {
   const res = await this.client.get('/mode');
   const o = res.data;
-  console.log(`\n📊 Mode: ${o.mode}`);
+  console.log(`\nMode: ${o.mode}`);
   console.log(`   Topic: ${o.topic || 'N/A'}`);
   if (o.mode !== 'freeform') {
     console.log(`   Round: ${o.round + 1}/${o.maxRounds}`);
@@ -392,7 +392,7 @@ if (input === '/next') {
 // /end
 if (input === '/end') {
   await this.client.post('/mode', { mode: 'freeform' });
-  console.log('\n🔄 Returned to freeform mode\n');
+  console.log('\nReturned to freeform mode\n');
   rl.prompt();
   return;
 }
@@ -404,7 +404,7 @@ Update `/help` to include new commands.
 
 ---
 
-### Phase 6: Orchestrator Pane (2 hours)
+### Phase 6: Orchestrator Pane (Complete)
 
 #### 6.1 Update Launcher for 5 Panes
 **File:** `bin/start-llm-groupchat.sh`
@@ -501,7 +501,7 @@ if command_type == 'mode_status':
 
 ---
 
-### Phase 7: Soft Turn Signals ✅ COMPLETE
+### Phase 7: Soft Turn Signals (Complete)
 
 #### 7.1 Gateway Tags Messages
 ```javascript
@@ -529,19 +529,32 @@ def inject_message(self, msg_obj):
     turn_signal = msg_obj.get('turnSignal')
 
     if turn_signal == 'your_turn':
-        content = f"🎯 YOUR TURN\n{content}"
+        content = f"[YOUR TURN]\n{content}"
     elif turn_signal == 'turn_wait':
         # Show notice but still inject (soft enforcement)
-        print(f"[CSP] Waiting for your turn (current: {msg_obj.get('currentTurn')})", file=sys.stderr)
+        print(f"[CSP] WAITING (current turn: {msg_obj.get('currentTurn')})", file=sys.stderr)
 
     self._write_injection(sender, content)
 ```
 
-**Acceptance:** Agents see "🎯 YOUR TURN" when it's their turn.
+**Acceptance:** Agents see "[YOUR TURN]" when it's their turn.
 
 ---
 
-### Phase 8: Improved ANSI Filtering ✅ COMPLETE
+### Addendum: Turn Timing and WORKING Signal (Complete)
+
+Gateway enforces turn timing in structured modes:
+- Warning after `CSP_TURN_WARN_MS` (default 90000ms)
+- Timeout after `CSP_TURN_TIMEOUT_MS` (default 120000ms)
+
+Agents can extend their turn explicitly:
+- Send `@working <note>` or `WORKING <note>` to reset the timer
+
+**Acceptance:** Warning resets on WORKING from the current turn agent, and timeout does not fire if WORKING is sent periodically.
+
+---
+
+### Phase 8: Improved ANSI Filtering (Complete)
 
 If shared output still contains artifacts, upgrade `_sanitize_stream()`:
 
@@ -583,8 +596,15 @@ Update `README.md`:
 - `/status` - Show current mode and turn
 - `/next` - Advance to next turn
 - `/end` - Return to freeform
-- `/share` - Enable output sharing for an agent
+
+### Agent Commands (sidecar)
+- `@send.<agent> message` - Send to specific agent
+- `@all message` - Broadcast to all
+- `@working [note]` - Extend current turn timeout
+- `/share` - Enable output sharing
 - `/noshare` - Disable output sharing
+- `/pause` - Pause message injection
+- `/resume` - Resume message injection
 
 ### Orchestrator Commands
 - `@mode.set debate "topic" --rounds N`
@@ -608,7 +628,9 @@ All IDs are lowercase, dashes allowed. Multiple instances get suffixes: `claude`
 - [x] History survives gateway restart (JSONL loaded on startup)
 - [x] `/mode debate "topic"` starts debate
 - [x] Turn announcements appear
-- [ ] Orchestrator can drive mode changes (Phase 6 - Optional, not yet implemented)
+- [x] Turn warning/timeout uses ASCII messages
+- [x] WORKING signal resets the turn timer for the active agent
+- [x] Orchestrator can drive mode changes (Phase 6)
 - [x] Soft turn signals display correctly (ASCII markers: [YOUR TURN], [WAITING])
 
 ---
@@ -617,18 +639,18 @@ All IDs are lowercase, dashes allowed. Multiple instances get suffixes: `claude`
 
 | Priority | Phase | Effort | Dependencies | Status |
 |----------|-------|--------|--------------|--------|
-| 🔴 Critical | 0: Verify fixes | 10 min | None | ✅ DONE |
-| 🟠 High | 1: Agent identity | 1-2 hr | Phase 0 | ✅ DONE |
-| 🟠 High | 2: Addressing fixes | 30 min | Phase 1 | ✅ DONE |
-| 🟡 Medium | 3: History persistence | 1 hr | None | ✅ DONE |
-| 🟡 Medium | 4: Orchestration state | 2 hr | None | ✅ DONE |
-| 🟡 Medium | 5: Human commands | 1 hr | Phase 4 | ✅ DONE |
-| 🟢 Low | 6: Orchestrator pane | 2 hr | Phase 4, 5 | ⏳ Optional |
-| 🟢 Low | 7: Turn signals | 1 hr | Phase 4 | ✅ DONE |
-| ⚪ Optional | 8: Better ANSI filter | 1 hr | None | ✅ DONE |
-| ⚪ Optional | 9: Documentation | 30 min | All | ✅ DONE |
+| Critical | 0: Verify fixes | 10 min | None | DONE |
+| High | 1: Agent identity | 1-2 hr | Phase 0 | DONE |
+| High | 2: Addressing fixes | 30 min | Phase 1 | DONE |
+| Medium | 3: History persistence | 1 hr | None | DONE |
+| Medium | 4: Orchestration state | 2 hr | None | DONE |
+| Medium | 5: Human commands | 1 hr | Phase 4 | DONE |
+| Low | 6: Orchestrator pane | 2 hr | Phase 4, 5 | DONE |
+| Low | 7: Turn signals | 1 hr | Phase 4 | DONE |
+| Optional | 8: Better ANSI filter | 1 hr | None | DONE |
+| Optional | 9: Documentation | 30 min | All | DONE |
 
-**Status:** 9/10 phases complete. Phase 6 (Orchestrator pane) is optional and not yet implemented.
+**Status:** 10/10 phases complete.
 
 ---
 

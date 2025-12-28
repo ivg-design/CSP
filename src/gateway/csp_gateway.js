@@ -27,12 +27,15 @@ class CSPGateway {
       maxRounds: 3,
       turnOrder: [],
       currentTurnIndex: 0,
-      lastTurnChange: Date.now()
+      lastTurnChange: Date.now(),
+      warningIssued: false
     };
     this.heartbeatInterval = null;
     this.turnTimeoutInterval = null;
     this.lastOrchestratorResponse = Date.now();
     this.missedHeartbeats = 0;
+    this.turnWarnMs = options.turnWarnMs || parseInt(process.env.CSP_TURN_WARN_MS || '90000', 10);
+    this.turnTimeoutMs = options.turnTimeoutMs || parseInt(process.env.CSP_TURN_TIMEOUT_MS || '120000', 10);
 
     // Security configuration
     this.config = {
@@ -168,6 +171,23 @@ class CSPGateway {
     return null;
   }
 
+  isWorkingSignal(content) {
+    if (typeof content !== 'string') return false;
+    if (/^\s*@working\b/i.test(content)) return true;
+    return /^\s*WORKING\b/.test(content);
+  }
+
+  handleWorkingSignal(fromAgent, content) {
+    if (!this.isWorkingSignal(content)) return { handled: false };
+    const current = this.getCurrentTurnAgent();
+    if (this.orchestration.mode !== 'freeform' && fromAgent === current) {
+      this.orchestration.lastTurnChange = Date.now();
+      this.orchestration.warningIssued = false;
+      return { handled: true, updated: true };
+    }
+    return { handled: true, updated: false };
+  }
+
   advanceTurn() {
     const o = this.orchestration;
     if (!o || o.mode === 'freeform') return { skipped: true };
@@ -177,6 +197,7 @@ class CSPGateway {
 
     o.currentTurnIndex += 1;
     o.lastTurnChange = Date.now();
+    o.warningIssued = false;
 
     if (o.currentTurnIndex >= o.turnOrder.length) {
       o.currentTurnIndex = 0;
@@ -390,6 +411,10 @@ class CSPGateway {
     app.post('/agent-output', (req, res) => {
       try {
         const { from, content, to } = req.body;
+        const working = this.handleWorkingSignal(from, content);
+        if (working.handled) {
+          return res.json({ success: true, working: true, updated: working.updated });
+        }
         if (from && from.startsWith('orchestrator')) {
           if (!this.isValidOrchestratorCommand(content)) {
             console.warn('[Gateway] Rejected invalid orchestrator command (agent-output)');
@@ -411,6 +436,11 @@ class CSPGateway {
 
         if (!from || !content) {
           return res.status(400).json({ error: 'Missing from or content' });
+        }
+
+        const working = this.handleWorkingSignal(from, content);
+        if (working.handled) {
+          return res.json({ success: true, working: true, updated: working.updated });
         }
 
         if (from && from.startsWith('orchestrator')) {
@@ -522,7 +552,8 @@ class CSPGateway {
         maxRounds: rounds || 3,
         turnOrder: agents || [],
         currentTurnIndex: 0,
-        lastTurnChange: Date.now()
+        lastTurnChange: Date.now(),
+        warningIssued: false
       };
       this.broadcastSystemMessage(`Mode: ${mode.toUpperCase()}`);
       if (topic) this.broadcastSystemMessage(`Topic: ${topic}`);
@@ -604,7 +635,14 @@ class CSPGateway {
     this.turnTimeoutInterval = setInterval(() => {
       if (this.orchestration.mode === 'freeform') return;
       const elapsed = Date.now() - this.orchestration.lastTurnChange;
-      if (elapsed > 120000) {
+      if (!this.orchestration.warningIssued && elapsed > this.turnWarnMs) {
+        const current = this.getCurrentTurnAgent();
+        if (current) {
+          this.broadcastSystemMessage(`[WARNING] @${current} turn has exceeded ${Math.round(this.turnWarnMs / 1000)}s.`);
+          this.orchestration.warningIssued = true;
+        }
+      }
+      if (elapsed > this.turnTimeoutMs) {
         const current = this.getCurrentTurnAgent();
         if (current) {
           this.broadcastSystemMessage(`[TIMEOUT] @${current} did not respond. Advancing turn.`);

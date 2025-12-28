@@ -12,57 +12,71 @@ This document consolidates the findings from the memo and prior analysis, valida
 
 ---
 
-## Current Implementation Review (Verified in Code)
+## Current State Update (2025-12-27)
 
-### Gateway (`src/gateway/csp_gateway.js`)
-- In-memory `chatHistory` with JSONL append-only persistence.
-- HTTP endpoints: `/register`, `/agent-output`, `/message`, `/inbox/:agentId`, `/agents`, `/history`.
-- WebSocket broadcast to all clients at `/ws`.
-- No orchestration state, no `/mode` endpoints.
-
-### Sidecar (`csp_sidecar.py`)
-- Registers agent, injects inbound messages into PTY.
-- Flow-control queue (busy/idle) and manual pause/resume.
-- Output streaming is intended to be disabled by default, but is re-enabled on any inbound message (bug).
-- Command detection supports `@query.log`, `@send.<agent>`, `@all`.
-
-### Human Interface (`src/human-interface/chat-controller.js`)
-- Supports `/agents`, `/help`, `@query.log`, `@agent`, `@all`.
-- No `/mode` or orchestration commands.
-
-### Launcher (`bin/start-llm-groupchat.sh`, `bin/csp-agent-launcher.sh`)
-- tmux session with Human + 3 agents.
-- Agent launcher runs `claude` as a command string; if `claude` is an alias, `os.execvp` will fail.
+- Structured orchestration is implemented (`/mode`, `/turn/next`, turn signals, auto-advance).
+- Turn timing includes warning/timeout plus explicit `@working`/`WORKING` extensions.
+- Orchestrator pane is supported; strict command allowlist is enforced.
+- History persists across restarts (JSONL load/cap).
+- Agent IDs are unique and returned from the gateway; dashed IDs are supported.
+- Output sharing is explicit (`/share`, `/noshare`) and ANSI sanitization is conservative.
 
 ---
 
-## Confirmed Issues (Merged Findings)
+## Current Implementation Review (Verified in Code)
 
-1) **Claude fails to start when invoked via alias**
-- Root cause: `os.execvp` does not resolve shell aliases.
-- References: `csp_sidecar.py:395`, `bin/csp-agent-launcher.sh:59`.
+### Gateway (`src/gateway/csp_gateway.js`)
+- In-memory `chatHistory` backed by JSONL persistence (load on startup, cap in memory).
+- HTTP endpoints: `/register`, `/agent-output`, `/message`, `/inbox/:agentId`, `/agents`, `/history`, `/mode`, `/turn/next`.
+- WebSocket broadcast to all clients at `/ws`.
+- Orchestration state (mode, round, turn order) with `turnSignal` and `currentTurn`.
+- Turn warning/timeout enforcement with `@working`/`WORKING` extensions.
+- Heartbeat context snapshots and strict orchestrator allowlist enforcement.
+
+### Sidecar (`csp_sidecar.py`)
+- Registers agent and uses gateway-returned `agentId`.
+- Flow-control with timeout-based injection and queueing, plus manual pause/resume.
+- Output sharing is opt-in via `/share` and `/noshare`.
+- Command detection supports `@query.log`, `@send.<agent>`, `@all`, `@mode.set`, `@mode.status`, `@working`, `NOOP`.
+- Turn markers (`[YOUR TURN]`) and waiting notices are shown on turn signals.
+
+### Human Interface (`src/human-interface/chat-controller.js`)
+- Supports `/agents`, `/help`, `@query.log`, `@agent`, `@all`.
+- Supports `/mode`, `/status`, `/next`, `/end` for orchestration control.
+
+### Launcher (`bin/start-llm-groupchat.sh`, `bin/csp-agent-launcher.sh`)
+- tmux session with Human + 3 agents, plus optional orchestrator pane.
+- Preflight CLI validation, config file support, and explicit `CSP_*_CMD` env overrides.
+
+---
+
+## Resolved Issues (Implemented)
+
+1) **Claude launch via alias**
+- Resolved by using explicit CLI command overrides in launcher.
 
 2) **Output feedback loop and ANSI spam**
-- Root cause: `share_enabled` set to `True` on any inbound message, contradicting the design intent to keep sharing off by default.
-- Additional issue: sanitization misses cursor/erase sequences (e.g., `31;2H`, `K`), so garbage leaks into chat.
-- References: `csp_sidecar.py:333-335`, `csp_sidecar.py:774`, `csp_sidecar.py:610`.
+- Resolved by keeping sharing opt-in and improving ANSI sanitization.
 
 3) **Agent ID collisions**
-- Root cause: sidecar truncates the ID to a base token (`split('-')[0]`) and gateway uses the requested ID directly.
-- Effect: multiple agents of the same type overwrite each other; direct routing and turn targeting fail.
-- References: `csp_sidecar.py:345-356`, `src/gateway/csp_gateway.js:68-86`, `bin/csp-agent-launcher.sh:31-47`.
+- Resolved with gateway-enforced unique IDs and sidecar adoption of the returned ID.
 
 4) **Inconsistent addressing rules**
-- Root cause: `@send.(\w+)` disallows dashes and the human controller lowercases targets, breaking any dashed unique IDs.
-- References: `csp_sidecar.py:51-77`, `src/human-interface/chat-controller.js:322-334`.
+- Resolved with dashed ID support in `@send` and consistent lowercasing.
 
-5) **History persistence is write-only**
-- Root cause: `/history` reads only in-memory data; JSONL is not loaded on startup, and history is unbounded in RAM.
-- References: `src/gateway/csp_gateway.js:12-18`, `src/gateway/csp_gateway.js:309-337`.
+5) **History persistence write-only**
+- Resolved by loading JSONL history on startup and capping memory use.
 
-6) **No orchestration surfaces exist yet**
-- Root cause: Gateway lacks `/mode` or state, and UIs have no mode commands.
-- References: `src/gateway/csp_gateway.js`, `src/human-interface/chat-controller.js:279-338`.
+6) **Missing orchestration surfaces**
+- Resolved with `/mode`, `/turn/next`, and turn signal support.
+
+---
+
+## Remaining Risks / Open Items
+
+- Flow control is still heuristic; forced injection can collide with heavy TUI redraws.
+- Turn timing depends on agents sending `@working` during long tasks.
+- Orchestrator compliance relies on allowlist enforcement and a strict prompt; regression tests would help.
 
 ---
 
@@ -86,6 +100,8 @@ This document consolidates the findings from the memo and prior analysis, valida
 ---
 
 ## Detailed Step-by-Step Plan
+
+Status: Plan executed. The steps below are retained for historical traceability; current behavior is reflected in the update sections above.
 
 ### Phase 0: Preflight and Baseline
 
@@ -280,6 +296,8 @@ Acceptance:
 - `/share` explicitly enables output sharing; `/noshare` disables it.
 - `/history` returns recent messages after a gateway restart.
 - `/mode` and `/turn/next` work end-to-end.
+- Turn warnings/timeouts trigger at configured thresholds.
+- `@working` or `WORKING` extends the current turn timer.
 - Orchestrator can set and query modes.
 - Debate/consensus flow works with structured phases and visible, turn-based output.
 

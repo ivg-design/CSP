@@ -61,6 +61,9 @@ class AgentCommandProcessor:
         self.mode_status_pattern = re.compile(r'@mode\.status')
         # S3: NOOP command for orchestrator heartbeat responses
         self.noop_pattern = re.compile(r'^NOOP\s*$', re.IGNORECASE)
+        # Turn timeout extension (explicit command only)
+        self.working_at_pattern = re.compile(r'^\s*@working\b(.*)$', re.IGNORECASE)
+        self.working_bare_pattern = re.compile(r'^\s*WORKING\b(.*)$')
 
     def detect_commands(self, text: str) -> list:
         """Detect all @-commands in text. Returns list of (command_type, args)"""
@@ -113,6 +116,15 @@ class AgentCommandProcessor:
                 commands.append(('noop', {}))
                 continue
 
+            # Turn timeout extension
+            match = self.working_at_pattern.search(line)
+            if not match:
+                match = self.working_bare_pattern.search(line)
+            if match:
+                note = match.group(1).strip()
+                commands.append(('working', {'note': note}))
+                continue
+
         return commands
 
     def execute_command(self, command_type: str, args: dict) -> str:
@@ -131,6 +143,8 @@ class AgentCommandProcessor:
             elif command_type == 'noop':
                 # S3: NOOP is a valid no-action command for orchestrator heartbeats
                 return "[CSP: NOOP acknowledged]"
+            elif command_type == 'working':
+                return self._execute_working(args)
             else:
                 return f"[CSP: Unknown command type: {command_type}]"
         except Exception as e:
@@ -302,6 +316,32 @@ class AgentCommandProcessor:
                 return f"[CSP: Status query failed ({response.status_code})]"
         except Exception as e:
             return f"[CSP: Status query error - {str(e)}]"
+
+    def _execute_working(self, args: dict) -> str:
+        """Send a working signal to extend the current turn timeout."""
+        try:
+            note = (args.get('note') or '').strip()
+            content = "WORKING" if not note else f"WORKING {note}"
+
+            headers = {'X-Auth-Token': self.auth_token} if self.auth_token else {}
+            payload = {
+                "from": self.agent_id,
+                "to": "broadcast",
+                "content": content
+            }
+
+            response = requests.post(
+                f"{self.gateway_url}/message",
+                json=payload,
+                headers=headers,
+                timeout=2
+            )
+
+            if response.status_code == 200:
+                return "[CSP: Working acknowledged]"
+            return f"[CSP: Working signal failed ({response.status_code})]"
+        except Exception as e:
+            return f"[CSP: Working signal error - {str(e)}]"
 
 
 class StreamCleaner:
