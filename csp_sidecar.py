@@ -945,6 +945,19 @@ class CSPSidecar:
 
         sender = msg_obj.get('from', 'Unknown') # Gateway sends 'from' field
         content = msg_obj.get('content', '')
+        msg_type = msg_obj.get('type', '')
+
+        # CRITICAL: Don't inject SYSTEM messages as commands!
+        # System messages (join notifications, warnings, timeouts) should be
+        # display-only, not submitted to the TUI as user input.
+        if sender == 'SYSTEM' or sender == 'system':
+            # Display system message in stderr only, don't inject
+            print(f"\n[SYSTEM] {content}", file=sys.stderr)
+            return
+
+        # Also skip heartbeat messages for non-orchestrator agents
+        if msg_type == 'heartbeat' and not self.is_orchestrator:
+            return
         turn_signal = msg_obj.get('turnSignal')  # 'your_turn' | 'turn_wait' | None
         current_turn = msg_obj.get('currentTurn')  # Who currently has the turn
 
