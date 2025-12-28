@@ -4,8 +4,17 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-HISTORY_FILE="$PROJECT_ROOT/csp_history.jsonl"
+LOGS_DIR="$PROJECT_ROOT/logs"
 GATEWAY_LOG="$PROJECT_ROOT/gateway.log"
+
+# Find most recent session log
+get_latest_session() {
+    if [[ -d "$LOGS_DIR" ]]; then
+        ls -t "$LOGS_DIR"/session_*.jsonl 2>/dev/null | head -1
+    fi
+}
+
+HISTORY_FILE="${CSP_LOG_FILE:-$(get_latest_session)}"
 
 usage() {
     cat <<EOF
@@ -14,11 +23,12 @@ CSP Log Viewer
 Usage: $0 [command] [options]
 
 Commands:
+  sessions         List all session logs
   messages [N]     Show last N messages (default: 50)
   follow           Follow messages in real-time
   gateway          Show gateway log
   export [file]    Export session to readable format
-  clear            Clear history (with confirmation)
+  clear            Clear all logs (with confirmation)
 
 Options:
   --from <agent>   Filter by sender
@@ -139,11 +149,26 @@ export_session() {
     echo "Exported to: $outfile"
 }
 
-clear_history() {
-    read -p "Clear message history? This cannot be undone. [y/N] " confirm
+list_sessions() {
+    echo "Session Logs in $LOGS_DIR:"
+    echo "---"
+    if [[ -d "$LOGS_DIR" ]]; then
+        for f in $(ls -t "$LOGS_DIR"/session_*.jsonl 2>/dev/null); do
+            count=$(wc -l < "$f" | tr -d ' ')
+            basename "$f" | sed 's/session_//' | sed 's/.jsonl//' | while read ts; do
+                echo "  $ts  ($count messages)  $f"
+            done
+        done
+    else
+        echo "  No logs directory found"
+    fi
+}
+
+clear_logs() {
+    read -p "Clear ALL session logs? This cannot be undone. [y/N] " confirm
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
-        rm -f "$HISTORY_FILE"
-        echo "History cleared."
+        rm -rf "$LOGS_DIR"/*.jsonl 2>/dev/null
+        echo "All logs cleared."
     else
         echo "Cancelled."
     fi
@@ -153,11 +178,12 @@ clear_history() {
 NC='\033[0m'
 
 case "${1:-messages}" in
+    sessions|list) list_sessions ;;
     messages) shift; show_messages "$@" ;;
     follow) follow_messages ;;
     gateway) show_gateway ;;
     export) shift; export_session "$@" ;;
-    clear) clear_history ;;
+    clear) clear_logs ;;
     -h|--help|help) usage ;;
     *) usage; exit 1 ;;
 esac

@@ -77,3 +77,4 @@ auth_tokens.txt
 # GitHub templates and archived files (keep local only)
 .github/
 .archive/csp_history.jsonl
+logs/

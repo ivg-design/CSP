@@ -14,10 +14,17 @@ class CSPGateway {
     this.wsConnections = new Set(); // Track WebSocket connections
     this.MAX_HISTORY = 1000;
 
-    // JSONL persistence configuration
-    this.historyFile = options.historyFile || path.join(process.cwd(), 'csp_history.jsonl');
+    // JSONL persistence configuration - timestamped per session (local time)
+    const logsDir = path.join(process.cwd(), 'logs');
+    if (!fs.existsSync(logsDir)) {
+      fs.mkdirSync(logsDir, { recursive: true });
+    }
+    const now = new Date();
+    const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}-${String(now.getSeconds()).padStart(2, '0')}`;
+    this.historyFile = options.historyFile || path.join(logsDir, `session_${timestamp}.jsonl`);
     this.initializeHistoryFile();
-    this.loadHistory();
+    // Don't load previous history for new sessions - start fresh
+    // this.loadHistory();
 
     // Orchestration state
     this.orchestration = {
@@ -289,9 +296,10 @@ class CSPGateway {
           this.agents.get(targetAgent).messageQueue.push(message);
       }
     } else {
-      // Broadcast to all agents except sender
+      // Broadcast to all agents except sender AND orchestrator
+      // Orchestrator only receives heartbeats and direct messages, not broadcasts
       for (const [agentId, agent] of this.agents) {
-        if (agentId !== fromAgent) {
+        if (agentId !== fromAgent && !agentId.startsWith('orchestrator')) {
           agent.messageQueue.push(message);
         }
       }
