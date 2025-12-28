@@ -26,8 +26,13 @@ class CSPGateway {
       round: 0,
       maxRounds: 3,
       turnOrder: [],
-      currentTurnIndex: 0
+      currentTurnIndex: 0,
+      lastTurnChange: Date.now()
     };
+    this.heartbeatInterval = null;
+    this.turnTimeoutInterval = null;
+    this.lastOrchestratorResponse = Date.now();
+    this.missedHeartbeats = 0;
 
     // Security configuration
     this.config = {
@@ -156,6 +161,52 @@ class CSPGateway {
     return finalId;
   }
 
+  getOrchestratorId() {
+    for (const [agentId] of this.agents) {
+      if (agentId.startsWith('orchestrator')) return agentId;
+    }
+    return null;
+  }
+
+  advanceTurn() {
+    const o = this.orchestration;
+    if (!o || o.mode === 'freeform') return { skipped: true };
+    if (!o.turnOrder || o.turnOrder.length === 0) {
+      return { error: 'No turn order configured' };
+    }
+
+    o.currentTurnIndex += 1;
+    o.lastTurnChange = Date.now();
+
+    if (o.currentTurnIndex >= o.turnOrder.length) {
+      o.currentTurnIndex = 0;
+      o.round += 1;
+
+      if (o.round >= o.maxRounds) {
+        this.broadcastSystemMessage(`${o.mode.toUpperCase()} complete.`);
+        o.mode = 'freeform';
+        return { complete: true };
+      }
+      this.broadcastSystemMessage(`Round ${o.round + 1}`);
+    }
+
+    const next = o.turnOrder[o.currentTurnIndex];
+    this.broadcastSystemMessage(`@${next} - Your turn.`);
+    return { success: true, currentTurn: next, round: o.round };
+  }
+
+  isValidOrchestratorCommand(content) {
+    const allowlist = [
+      /^@mode\.set\s+\w+\s+"[^"]+"/,
+      /^@mode\.status\s*$/,
+      /^@send\.[\w-]+\s+.+/,
+      /^@all\s+.+/,
+      /^@query\.log(\s+\d+)?$/,
+      /^NOOP\s*$/
+    ];
+    return allowlist.some(re => re.test((content || '').trim()));
+  }
+
   broadcastSystemMessage(content) {
     const message = {
       id: this.generateMessageId(),
@@ -200,6 +251,12 @@ class CSPGateway {
     // Persist to JSONL file + in-memory
     this.appendToHistory(message);
 
+    // Track orchestrator responses for heartbeat monitoring
+    if (fromAgent && fromAgent.startsWith('orchestrator')) {
+      this.lastOrchestratorResponse = Date.now();
+      this.missedHeartbeats = 0;
+    }
+
     // Update sender's last seen
     if (this.agents.has(fromAgent)) {
         this.agents.get(fromAgent).lastSeen = Date.now();
@@ -221,6 +278,12 @@ class CSPGateway {
 
     // Broadcast via WebSocket to all connected clients
     this.broadcastWebSocket(message);
+
+    // Auto-advance turn when current agent responds
+    const current = this.getCurrentTurnAgent();
+    if (current && fromAgent === current && this.orchestration.mode !== 'freeform') {
+      setTimeout(() => this.advanceTurn(), 100);
+    }
 
     return message;
   }
@@ -327,6 +390,12 @@ class CSPGateway {
     app.post('/agent-output', (req, res) => {
       try {
         const { from, content, to } = req.body;
+        if (from && from.startsWith('orchestrator')) {
+          if (!this.isValidOrchestratorCommand(content)) {
+            console.warn('[Gateway] Rejected invalid orchestrator command (agent-output)');
+            return res.status(400).json({ error: 'Invalid orchestrator command' });
+          }
+        }
         const message = this.routeMessage(from, content, to);
         res.json({ success: true, messageId: message.id });
       } catch (error) {
@@ -342,6 +411,13 @@ class CSPGateway {
 
         if (!from || !content) {
           return res.status(400).json({ error: 'Missing from or content' });
+        }
+
+        if (from && from.startsWith('orchestrator')) {
+          if (!this.isValidOrchestratorCommand(content)) {
+            console.warn('[Gateway] Rejected invalid orchestrator command');
+            return res.status(400).json({ error: 'Invalid orchestrator command' });
+          }
         }
 
         // Route the message (to can be agent_id or 'broadcast')
@@ -445,7 +521,8 @@ class CSPGateway {
         round: 0,
         maxRounds: rounds || 3,
         turnOrder: agents || [],
-        currentTurnIndex: 0
+        currentTurnIndex: 0,
+        lastTurnChange: Date.now()
       };
       this.broadcastSystemMessage(`Mode: ${mode.toUpperCase()}`);
       if (topic) this.broadcastSystemMessage(`Topic: ${topic}`);
@@ -460,20 +537,8 @@ class CSPGateway {
       if (o.mode === 'freeform') {
         return res.status(400).json({ error: 'Not in structured mode' });
       }
-      o.currentTurnIndex += 1;
-      if (o.currentTurnIndex >= o.turnOrder.length) {
-        o.currentTurnIndex = 0;
-        o.round += 1;
-        if (o.round >= o.maxRounds) {
-          this.broadcastSystemMessage(`${o.mode.toUpperCase()} complete.`);
-          o.mode = 'freeform';
-          return res.json({ complete: true });
-        }
-        this.broadcastSystemMessage(`Round ${o.round + 1}`);
-      }
-      const next = o.turnOrder[o.currentTurnIndex];
-      this.broadcastSystemMessage(`@${next} - Your turn.`);
-      res.json({ success: true, currentTurn: next, round: o.round });
+      const result = this.advanceTurn();
+      res.json(result);
     });
 
     // Unregister
@@ -492,6 +557,61 @@ class CSPGateway {
     setInterval(() => {
       this.cleanupInactiveAgents();
     }, 60 * 1000);
+
+    // Heartbeat interval (always on)
+    this.heartbeatInterval = setInterval(() => {
+      const orchId = this.getOrchestratorId();
+      if (!orchId) return;
+
+      const o = this.orchestration;
+      const elapsed = Date.now() - (o.lastTurnChange || Date.now());
+      const recentMessages = this.chatHistory.slice(-10).map(m => ({
+        from: m.from,
+        content: (m.content || '').substring(0, 200)
+      }));
+
+      const msg = {
+        id: this.generateMessageId(),
+        timestamp: new Date().toISOString(),
+        from: 'SYSTEM',
+        to: orchId,
+        type: 'heartbeat',
+        content: `[HEARTBEAT] Elapsed: ${Math.round(elapsed / 1000)}s, State: ${o.mode}, Turn: ${this.getCurrentTurnAgent() || 'N/A'}`,
+        context: {
+          mode: o.mode,
+          round: o.round,
+          maxRounds: o.maxRounds,
+          currentTurn: this.getCurrentTurnAgent(),
+          elapsed,
+          recentMessages
+        }
+      };
+
+      if (this.agents.has(orchId)) {
+        this.agents.get(orchId).messageQueue.push(msg);
+      }
+
+      const timeSinceResponse = Date.now() - this.lastOrchestratorResponse;
+      if (timeSinceResponse > 60000) {
+        this.missedHeartbeats += 1;
+        if (this.missedHeartbeats >= 2) {
+          this.broadcastSystemMessage('[SYSTEM] Orchestrator unresponsive. Consider restart.');
+        }
+      }
+    }, 30000);
+
+    // Turn timeout enforcement
+    this.turnTimeoutInterval = setInterval(() => {
+      if (this.orchestration.mode === 'freeform') return;
+      const elapsed = Date.now() - this.orchestration.lastTurnChange;
+      if (elapsed > 120000) {
+        const current = this.getCurrentTurnAgent();
+        if (current) {
+          this.broadcastSystemMessage(`[TIMEOUT] @${current} did not respond. Advancing turn.`);
+          this.advanceTurn();
+        }
+      }
+    }, 10000);
 
     // Create HTTP server
     const server = http.createServer(app);
