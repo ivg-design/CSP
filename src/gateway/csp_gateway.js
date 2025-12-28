@@ -247,12 +247,36 @@ class CSPGateway {
 
     this.appendToHistory(message); // Persist to JSONL + in-memory
 
-    // Deliver to all agents
+    // Deliver to all agents except orchestrator
     for (const [agentId, agent] of this.agents) {
-      agent.messageQueue.push(message);
+      if (!agentId.startsWith('orchestrator')) {
+        agent.messageQueue.push(message);
+      }
     }
 
     // Broadcast via WebSocket
+    this.broadcastWebSocket(message);
+  }
+
+  sendToHuman(content) {
+    // Send system message only to Human interface, not to agents
+    const message = {
+      id: this.generateMessageId(),
+      timestamp: new Date().toISOString(),
+      from: 'SYSTEM',
+      to: 'Human',
+      content: content,
+      type: 'system'
+    };
+
+    this.appendToHistory(message);
+
+    // Only deliver to Human
+    if (this.agents.has('Human')) {
+      this.agents.get('Human').messageQueue.push(message);
+    }
+
+    // Also broadcast via WebSocket for Human interface
     this.broadcastWebSocket(message);
   }
 
@@ -633,8 +657,10 @@ class CSPGateway {
       const timeSinceResponse = Date.now() - this.lastOrchestratorResponse;
       if (timeSinceResponse > 60000) {
         this.missedHeartbeats += 1;
-        if (this.missedHeartbeats >= 2) {
-          this.broadcastSystemMessage('[SYSTEM] Orchestrator unresponsive. Consider restart.');
+        // Only warn once (when hitting exactly 2), not repeatedly
+        // Only send to Human, not to all agents
+        if (this.missedHeartbeats === 2) {
+          this.sendToHuman('[SYSTEM] Orchestrator unresponsive. Consider restart.');
         }
       }
     }, 30000);
