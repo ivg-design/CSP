@@ -59,6 +59,8 @@ class AgentCommandProcessor:
             r'@mode\.set\s+(\w+)\s+"([^"]+)"(?:\s+--rounds\s+(\d+))?'
         )
         self.mode_status_pattern = re.compile(r'@mode\.status')
+        # S3: NOOP command for orchestrator heartbeat responses
+        self.noop_pattern = re.compile(r'^NOOP\s*$', re.IGNORECASE)
 
     def detect_commands(self, text: str) -> list:
         """Detect all @-commands in text. Returns list of (command_type, args)"""
@@ -105,6 +107,12 @@ class AgentCommandProcessor:
                 commands.append(('mode_status', {}))
                 continue
 
+            # S3: Check for NOOP (orchestrator heartbeat response)
+            match = self.noop_pattern.search(line)
+            if match:
+                commands.append(('noop', {}))
+                continue
+
         return commands
 
     def execute_command(self, command_type: str, args: dict) -> str:
@@ -120,6 +128,9 @@ class AgentCommandProcessor:
                 return self._execute_mode_set(args)
             elif command_type == 'mode_status':
                 return self._execute_mode_status(args)
+            elif command_type == 'noop':
+                # S3: NOOP is a valid no-action command for orchestrator heartbeats
+                return "[CSP: NOOP acknowledged]"
             else:
                 return f"[CSP: Unknown command type: {command_type}]"
         except Exception as e:
@@ -436,6 +447,8 @@ class CSPSidecar:
         self.share_enabled = False
         # Phase 2: Agent command processor (will be initialized after agent_id is set)
         self.command_processor = None
+        # S1: Orchestrator detection - used for special handling of heartbeat context
+        self.is_orchestrator = 'orchestrator' in self.agent_name.lower()
         
     def register_agent(self):
         """Register this agent with the gateway"""
@@ -892,6 +905,29 @@ class CSPSidecar:
         content = msg_obj.get('content', '')
         turn_signal = msg_obj.get('turnSignal')  # 'your_turn' | 'turn_wait' | None
         current_turn = msg_obj.get('currentTurn')  # Who currently has the turn
+
+        # S2: Extract heartbeat context if present (orchestrator only)
+        context = msg_obj.get('context')
+        if context and self.is_orchestrator:
+            # Format context for injection
+            mode = context.get('mode', 'freeform')
+            round_num = context.get('round', 0) + 1
+            max_rounds = context.get('maxRounds', 3)
+            current = context.get('currentTurn', 'N/A')
+            elapsed = context.get('elapsed', 0) / 1000
+
+            context_str = f"\n[STATE] Mode={mode}, Round={round_num}/{max_rounds}, Turn={current}, Elapsed={elapsed:.0f}s"
+
+            # Include recent messages summary
+            recent = context.get('recentMessages', [])
+            if recent:
+                context_str += f"\n[RECENT] {len(recent)} messages"
+                for m in recent[-3:]:  # Show last 3
+                    msg_from = m.get('from', 'unknown')
+                    msg_content = m.get('content', '')[:50]
+                    context_str += f"\n  {msg_from}: {msg_content}..."
+
+            content = context_str + "\n" + content
 
         # FIXED: Do NOT auto-enable sharing - it causes feedback loops with TUI apps
         # Output sharing is ONE-WAY by design: Human → Agents only
