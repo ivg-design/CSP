@@ -30,6 +30,8 @@ import collections
 import re
 import websocket  # type: ignore[import-untyped]
 import urllib.parse
+import subprocess
+import shutil
 from datetime import datetime
 
 # Configuration
@@ -947,27 +949,18 @@ class CSPSidecar:
         current_turn = msg_obj.get('currentTurn')  # Who currently has the turn
 
         # S2: Extract heartbeat context if present (orchestrator only)
+        # Format as single line for TUI compatibility
         context = msg_obj.get('context')
         if context and self.is_orchestrator:
-            # Format context for injection
             mode = context.get('mode', 'freeform')
             round_num = context.get('round', 0) + 1
             max_rounds = context.get('maxRounds', 3)
             current = context.get('currentTurn', 'N/A')
             elapsed = context.get('elapsed', 0) / 1000
 
-            context_str = f"\n[STATE] Mode={mode}, Round={round_num}/{max_rounds}, Turn={current}, Elapsed={elapsed:.0f}s"
-
-            # Include recent messages summary
-            recent = context.get('recentMessages', [])
-            if recent:
-                context_str += f"\n[RECENT] {len(recent)} messages"
-                for m in recent[-3:]:  # Show last 3
-                    msg_from = m.get('from', 'unknown')
-                    msg_content = m.get('content', '')[:50]
-                    context_str += f"\n  {msg_from}: {msg_content}..."
-
-            content = context_str + "\n" + content
+            # Compact single-line format for TUI apps
+            context_str = f"[STATE: {mode} R{round_num}/{max_rounds} Turn={current} {elapsed:.0f}s] "
+            content = context_str + content
 
         # FIXED: Do NOT auto-enable sharing - it causes feedback loops with TUI apps
         # Output sharing is ONE-WAY by design: Human → Agents only
@@ -1042,18 +1035,78 @@ class CSPSidecar:
         self._write_injection(sender, content, turn_signal)
 
     def _write_injection(self, sender, content, turn_signal=None):
-        """Write a formatted injection to the agent PTY."""
+        """Write a formatted injection to the agent PTY.
+
+        Strategy: Use tmux send-keys if available (more reliable for TUI apps),
+        fall back to PTY master write if not in tmux.
+        """
+        # Add turn marker if this is a turn signal
+        turn_marker = ""
+        if turn_signal == 'your_turn':
+            turn_marker = "[YOUR TURN] "
+
+        # Format the message
+        message = f"{turn_marker}[From {sender}]: {content}"
+
+        # Try tmux send-keys first (more reliable for TUI apps)
+        if self._try_tmux_sendkeys(message):
+            return
+
+        # Fallback to PTY master write
         if self.master_fd is None:
             print(f"[CSP] Cannot inject: PTY not initialized", file=sys.stderr)
             return
 
-        # Add turn marker if this is a turn signal
-        turn_marker = ""
-        if turn_signal == 'your_turn':
-            turn_marker = "[YOUR TURN]\n"
+        # Clear line, write message, send Enter
+        os.write(self.master_fd, b'\x15')  # Ctrl+U
+        time.sleep(0.02)
+        os.write(self.master_fd, message.encode('utf-8'))
+        time.sleep(0.05)
+        os.write(self.master_fd, b'\r')
 
-        injection = f"\n{turn_marker}[Context: Message from {sender}]\n{content}\n"
-        os.write(self.master_fd, injection.encode('utf-8'))
+    def _try_tmux_sendkeys(self, message):
+        """Try to inject using tmux send-keys (works better for TUI apps).
+
+        Returns True if successful, False if tmux not available.
+        """
+        # Check if tmux is available
+        if not shutil.which('tmux'):
+            return False
+
+        # Check if we're in a tmux session
+        tmux_pane = os.environ.get('TMUX_PANE')
+        if not tmux_pane:
+            return False
+
+        try:
+            # Send the message text literally (-l flag)
+            subprocess.run(
+                ['tmux', 'send-keys', '-t', tmux_pane, '-l', message],
+                check=True,
+                capture_output=True,
+                timeout=2
+            )
+
+            # Small delay before Enter
+            time.sleep(0.05)
+
+            # Send Enter key (C-m or Enter)
+            subprocess.run(
+                ['tmux', 'send-keys', '-t', tmux_pane, 'Enter'],
+                check=True,
+                capture_output=True,
+                timeout=2
+            )
+
+            print(f"[CSP] Injected via tmux send-keys", file=sys.stderr)
+            return True
+
+        except subprocess.SubprocessError as e:
+            print(f"[CSP] tmux send-keys failed: {e}", file=sys.stderr)
+            return False
+        except Exception as e:
+            print(f"[CSP] tmux injection error: {e}", file=sys.stderr)
+            return False
 
     def _is_control_pause(self, content: str) -> bool:
         if not content:

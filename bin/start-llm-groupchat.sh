@@ -158,11 +158,8 @@ if [[ "${CSP_ORCHESTRATOR:-0}" == "1" ]]; then
 fi
 
 for pane in "${PANES[@]}"; do
-  "$TMUX_BIN" send-keys -t "$SESSION_NAME:$pane" "export CSP_AUTH_TOKEN='$CSP_AUTH_TOKEN'" C-m
-  "$TMUX_BIN" send-keys -t "$SESSION_NAME:$pane" "export CSP_GATEWAY_URL='$CSP_GATEWAY_URL'" C-m
-  "$TMUX_BIN" send-keys -t "$SESSION_NAME:$pane" "export CSP_CLAUDE_CMD='${CSP_CLAUDE_CMD:-claude --dangerously-skip-permissions}'" C-m
-  "$TMUX_BIN" send-keys -t "$SESSION_NAME:$pane" "export CSP_GEMINI_CMD='${CSP_GEMINI_CMD:-gemini}'" C-m
-  "$TMUX_BIN" send-keys -t "$SESSION_NAME:$pane" "export CSP_CODEX_CMD='${CSP_CODEX_CMD:-codex}'" C-m
+  # Set env vars silently and clear screen
+  "$TMUX_BIN" send-keys -t "$SESSION_NAME:$pane" "export CSP_AUTH_TOKEN='$CSP_AUTH_TOKEN' CSP_GATEWAY_URL='$CSP_GATEWAY_URL' CSP_CLAUDE_CMD='${CSP_CLAUDE_CMD:-claude --dangerously-skip-permissions}' CSP_GEMINI_CMD='${CSP_GEMINI_CMD:-gemini}' CSP_CODEX_CMD='${CSP_CODEX_CMD:-codex}' && clear" C-m
 done
 
 # Launch processes in panes
